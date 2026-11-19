@@ -1,0 +1,15 @@
+[package]
+name = "ha-remote"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+cmf-wp2-app.workspace = true
+
+[dev-dependencies]
+wp2-core.workspace = true
+
+[[bin]]
+name = "ha-remote"
+bench = false

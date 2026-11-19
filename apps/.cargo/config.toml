@@ -1,0 +1,10 @@
+[build]
+target = "thumbv7em-none-eabi"
+target-dir = "../target"
+
+[target.thumbv7em-none-eabi]
+rustflags = ["-C", "link-arg=-Tapp.ld", "-C", "link-arg=--emit-relocs", "-C", "target-feature=+no-movt", "--check-cfg=cfg(wp2_sim)"]
+
+# host builds: cargo test, and the wp2-apps simulator (--cfg wp2_sim)
+[target.'cfg(not(target_os = "none"))']
+rustflags = ["--check-cfg=cfg(wp2_sim)"]

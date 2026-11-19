@@ -1,0 +1,5 @@
+name = "Home Assistant"
+summary = "Control up to five Home Assistant lights and groups from your watch"
+version = "0.1.25"
+author = "CMF Tech Community"
+
