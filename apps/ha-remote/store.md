@@ -3,6 +3,7 @@ Control up to ten Home Assistant entities from the wrist: lights, switches, fans
 - **Toggle rows** show a stock switch for on/off controls.
 - **Brightness sliders** for lights work like the watch's volume slider: drag on the row to dim the bulb, and the phone confirms the real state back.
 - **Up to five favorites** live on the page next to the watch face and the widget card; everything else stays in the Apps row.
+- **Inactive** appears when Home Assistant has no data for a device (it lost power): the row greys out instead of failing, and comes back when the device does.
 
 The phone is the only Home Assistant client: it sends commands over the encrypted app channel and reports the confirmed state, including changes made from other apps.
 

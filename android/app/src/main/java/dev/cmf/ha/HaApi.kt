@@ -8,8 +8,12 @@ import java.net.URL
 /** Home Assistant REST calls. Blocking; call from a background dispatcher. */
 class HaApi(private val base: String, private val token: String) {
 
-    /** on/off plus brightness percent (0..=100; for non-dimmable entities 0 or 100). */
-    data class EntityState(val on: Boolean, val value: Int)
+    /**
+     * on/off plus brightness percent (0..=100; for non-dimmable entities 0 or 100) and whether
+     * Home Assistant currently has data for the entity. available = false is the normal state
+     * of a device that lost power — not an error.
+     */
+    data class EntityState(val on: Boolean, val value: Int, val available: Boolean = true)
 
     private fun request(path: String, method: String = "GET", json: JSONObject? = null): String {
         val connection = URL(base.trimEnd('/') + path).openConnection() as HttpURLConnection
@@ -50,7 +54,7 @@ class HaApi(private val base: String, private val token: String) {
         val obj = JSONObject(request("/api/states/$id"))
         val raw = obj.optString("state")
         if (raw == "unavailable" || raw == "unknown") {
-            error("Home Assistant entity is unavailable ($raw)")
+            return EntityState(false, 0, available = false)
         }
         val on = raw == "on" || raw == "true" || raw == "open"
         val brightness = obj.optJSONObject("attributes")?.optInt("brightness", -1) ?: -1
@@ -59,7 +63,7 @@ class HaApi(private val base: String, private val token: String) {
             brightness in 0..255 -> (brightness * 100 + 127) / 255
             else -> 100
         }
-        return EntityState(on, value.coerceIn(0, 100))
+        return EntityState(on, value.coerceIn(0, 100), available = true)
     }
 
     /** Generic on/off: `homeassistant.turn_on/off` maps to each domain's own service. */
@@ -87,7 +91,7 @@ class HaApi(private val base: String, private val token: String) {
     fun awaitState(id: String, on: Boolean): Boolean {
         val deadline = System.nanoTime() + 5_000_000_000L
         do {
-            if (runCatching { state(id).on }.getOrNull() == on) return true
+            if (runCatching { state(id) }.getOrNull().let { it != null && it.available && it.on == on }) return true
             Thread.sleep(350)
         } while (System.nanoTime() < deadline)
         return false
@@ -99,8 +103,8 @@ class HaApi(private val base: String, private val token: String) {
         val deadline = System.nanoTime() + 5_000_000_000L
         do {
             val current = runCatching { state(id) }.getOrNull()
-            if (current != null && current.on && target > 0 && kotlin.math.abs(current.value - target) <= 3) return true
-            if (current != null && target == 0 && !current.on) return true
+            if (current != null && current.available && current.on && target > 0 && kotlin.math.abs(current.value - target) <= 3) return true
+            if (current != null && current.available && target == 0 && !current.on) return true
             Thread.sleep(350)
         } while (System.nanoTime() < deadline)
         return false

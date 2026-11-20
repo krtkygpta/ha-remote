@@ -5,7 +5,7 @@ use cmf_wp2_app::lv::{
 use cmf_wp2_app::stock;
 
 /// Bytes reserved before building one header+row group (fan glyphs make rows the biggest).
-const ROW_BYTES: usize = 1000;
+const ROW_BYTES: usize = 1200;
 /// Bytes reserved before writing one row's live update, including an icon swap.
 const UPDATE_BYTES: usize = 400;
 const ROW_H: i32 = 110;
@@ -39,6 +39,8 @@ pub(crate) struct Screen {
     pills: [Obj; MAX_BUTTONS],
     knobs: [Obj; MAX_BUTTONS],
     sliders: [Obj; MAX_BUTTONS],
+    /// Shown in place of the switch/slider while the entity is unavailable in HA.
+    inactive: [Obj; MAX_BUTTONS],
     icons: [Obj; MAX_BUTTONS],
     icon_kinds: [u8; MAX_BUTTONS],
     /// The row belongs to slot `i`; kept so events map back to controls.
@@ -219,6 +221,7 @@ impl Screen {
         let mut pills = [Obj(0); MAX_BUTTONS];
         let mut knobs = [Obj(0); MAX_BUTTONS];
         let mut sliders = [Obj(0); MAX_BUTTONS];
+        let mut inactives = [Obj(0); MAX_BUTTONS];
         let mut rows = [Obj(0); MAX_BUTTONS];
         let mut icons = [Obj(0); MAX_BUTTONS];
         let mut icon_kinds = [0u8; MAX_BUTTONS];
@@ -271,10 +274,24 @@ impl Screen {
             b.events(slider, &[Ev::ValueChanged])?;
             sliders[i] = slider;
 
-            // Kind is set by the phone and can arrive or change after this first build.
-            Self::kind_layout(b, names[i], pills[i], sliders[i], button.is_dimmer())?;
-            if !button.is_dimmer() { b.flags(sliders[i], &[Flag::Hidden], &[])?; }
-            else { b.flags(pills[i], &[Flag::Hidden], &[])?; }
+            let inactive = b.create(Class::Label, row)?;
+            b.text(inactive, "Inactive")?;
+            b.size(inactive, 120, CONTENT)?;
+            b.style(inactive, Prop::TextColor, 0, stock::GREY)?;
+            b.style(inactive, Prop::TextAlign, 0, 2)?;
+            inactives[i] = inactive;
+
+            // Kind and availability are set by the phone and can arrive or change after
+            // this first build.
+            Self::row_state_layout(
+                b,
+                names[i],
+                pills[i],
+                sliders[i],
+                inactives[i],
+                button.is_dimmer(),
+                button.available,
+            )?;
         }
         Ok(Self {
             mode,
@@ -284,28 +301,45 @@ impl Screen {
             pills,
             knobs,
             sliders,
+            inactive: inactives,
             icons,
             icon_kinds,
             rows,
         })
     }
 
-    /// Toggle rows center the name beside the switch; dimmer rows put the name above the
-    /// slider.
-    fn kind_layout(
+    /// The row's shape for the current kind and availability: name position/colour and
+    /// which of the switch, slider and "Inactive" label is visible.
+    fn row_state_layout(
         b: &mut Batch,
         name: Obj,
         pill: Obj,
         slider: Obj,
+        inactive: Obj,
         dimmer: bool,
+        available: bool,
     ) -> Result<(), LvError> {
         if dimmer {
             b.align(name, Align::LeftMid, NAME_X, NAME_Y_DIMMER)?;
-            b.align(slider, Align::LeftMid, NAME_X, SLIDER_Y)?;
-            b.flags(pill, &[Flag::Hidden], &[])?;
+            b.align(inactive, Align::LeftMid, NAME_X, SLIDER_Y)?;
         } else {
             b.align(name, Align::LeftMid, NAME_X, 0)?;
+            b.align(inactive, Align::RightMid, -20, 0)?;
+        }
+        b.style(name, Prop::TextColor, 0, if available { stock::WHITE } else { stock::GREY })?;
+        if !available {
+            b.flags(pill, &[Flag::Hidden], &[])?;
             b.flags(slider, &[Flag::Hidden], &[])?;
+            b.flags(inactive, &[], &[Flag::Hidden])?;
+        } else {
+            b.flags(inactive, &[Flag::Hidden], &[])?;
+            if dimmer {
+                b.flags(pill, &[Flag::Hidden], &[])?;
+                b.flags(slider, &[], &[Flag::Hidden])?;
+            } else {
+                b.flags(slider, &[Flag::Hidden], &[])?;
+                b.flags(pill, &[], &[Flag::Hidden])?;
+            }
         }
         Ok(())
     }
@@ -387,13 +421,8 @@ impl Screen {
             let mut buf = [0u8; NAME_MAX + 2];
             b.text(self.names[i], write_label(m, i, &mut buf))?;
             let dimmer = button.is_dimmer();
-            if dimmer {
-                b.flags(self.pills[i], &[Flag::Hidden], &[])?;
-                b.flags(self.sliders[i], &[], &[Flag::Hidden])?;
-                b.value(self.sliders[i], button.value.min(100) as i32, false)?;
-            } else {
-                b.flags(self.sliders[i], &[Flag::Hidden], &[])?;
-                b.flags(self.pills[i], &[], &[Flag::Hidden])?;
+            b.value(self.sliders[i], button.value.min(100) as i32, false)?;
+            if !dimmer && button.available {
                 b.style(self.pills[i], Prop::BgColor, 0, if button.on { stock::WHITE } else { stock::GREY })?;
                 b.style(self.knobs[i], Prop::BgColor, 0, if button.on { stock::BLACK } else { stock::WHITE })?;
                 b.align(
@@ -403,7 +432,15 @@ impl Screen {
                     0,
                 )?;
             }
-            Self::kind_layout(b, self.names[i], self.pills[i], self.sliders[i], dimmer)?;
+            Self::row_state_layout(
+                b,
+                self.names[i],
+                self.pills[i],
+                self.sliders[i],
+                self.inactive[i],
+                dimmer,
+                button.available,
+            )?;
         }
         Ok(())
     }
@@ -472,6 +509,7 @@ mod tests {
             assert_eq!(table.class(screen.rows[i].0), Some(wp2_core::lvcmd::Class::Obj));
             assert_eq!(table.class(screen.sliders[i].0), Some(wp2_core::lvcmd::Class::Slider));
             assert_eq!(table.class(screen.pills[i].0), Some(wp2_core::lvcmd::Class::Obj));
+            assert_eq!(table.class(screen.inactive[i].0), Some(wp2_core::lvcmd::Class::Label));
         }
         // disabled slots show, then a config state arrives: on, value, error, disconnect
         assert_eq!(model.apply(b"H1S\x00\x01\x19\x00"), Effect::Changed);
@@ -481,6 +519,10 @@ mod tests {
         screen.update(&mut b, &model, &mut |batch| validate_and_apply(batch, &mut table)).unwrap();
         validate_and_apply(&mut b, &mut table).unwrap();
         model.mark_disconnected();
+        screen.update(&mut b, &model, &mut |batch| validate_and_apply(batch, &mut table)).unwrap();
+        validate_and_apply(&mut b, &mut table).unwrap();
+        // an entity HA cannot reach flips to the inactive state without breaking the batch
+        model.apply(b"H1S\x00\x00\x00\x00\x00");
         screen.update(&mut b, &model, &mut |batch| validate_and_apply(batch, &mut table)).unwrap();
         validate_and_apply(&mut b, &mut table).unwrap();
         // a rename swaps the icon; the batch must stay valid

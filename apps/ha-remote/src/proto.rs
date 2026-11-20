@@ -42,6 +42,8 @@ pub const NO_FAVORITE: u8 = 0xFF;
 pub struct Button {
     pub enabled: bool,
     pub on: bool,
+    /// Last HA availability; runtime-only (not persisted): true until the phone says otherwise.
+    pub available: bool,
     /// Brightness percent 0..=100 for a dimmer; 0 or 100 mirrors `on` for a toggle.
     pub value: u8,
     pub kind: u8,
@@ -55,6 +57,7 @@ impl Button {
     pub const EMPTY: Self = Self {
         enabled: false,
         on: false,
+        available: true,
         value: 0,
         kind: KIND_TOGGLE,
         name: [0; NAME_MAX],
@@ -297,26 +300,39 @@ impl Model {
             CONFIG if msg.len() >= 4 => self.legacy_config(msg),
             GROUPS if msg.len() >= 4 => self.legacy_groups(msg),
             HEARTBEAT if msg.len() == 3 => { self.connected = true; Effect::Heartbeat }
-            STATE if msg.len() == 6 || msg.len() == 7 => {
+            STATE if matches!(msg.len(), 6 | 7 | 8) => {
                 let i = msg[3] as usize;
                 if i >= MAX_BUTTONS || msg[4] > 1 { return Effect::Ignored; }
-                let (value, result) = if msg.len() == 7 {
-                    if msg[5] > 100 { return Effect::Ignored; }
-                    (msg[5], msg[6])
-                } else {
-                    (if msg[4] == 1 { 100 } else { 0 }, msg[5])
+                let (value, result, available) = match msg.len() {
+                    8 => {
+                        if msg[5] > 100 || msg[7] > 1 { return Effect::Ignored; }
+                        (msg[5], msg[6], msg[7] == 1)
+                    }
+                    7 => {
+                        if msg[5] > 100 { return Effect::Ignored; }
+                        (msg[5], msg[6], true)
+                    }
+                    _ => (if msg[4] == 1 { 100 } else { 0 }, msg[5], true),
                 };
                 let b = &mut self.buttons[i];
                 b.on = msg[4] == 1;
                 b.value = value;
+                b.available = available;
                 self.connected = true;
+                let was_pending = self.pending == Some(i as u8);
                 if self.pending == Some(i as u8) {
                     self.pending = None;
                     self.pending_target = None;
                     self.pending_value = None;
                     self.pending_seq = None;
                 }
-                if result != RESULT_OK { self.error = Some(result); } else { self.error = None; }
+                if available {
+                    if result != RESULT_OK { self.error = Some(result); } else { self.error = None; }
+                } else if was_pending {
+                    // The device itself is offline; the command is resolved and that is a
+                    // device state, not an app/link failure.
+                    self.error = None;
+                }
                 Effect::Changed
             }
             ACK if msg.len() == 4 && self.pending_seq == Some(msg[3]) => {
@@ -604,6 +620,23 @@ mod tests {
         assert!(m.brightness_frame(0, 10, 1).is_none());
         assert_eq!(m.apply(b"H1P"), Effect::Heartbeat);
         assert!(m.connected);
+    }
+
+    #[test]
+    fn availability_marks_a_device_inactive_without_an_app_error() {
+        let mut m = ten_slots();
+        m.toggle_frame(0, 9).unwrap();
+        // 8-byte state: slot, on, value, result, available
+        assert_eq!(m.apply(b"H1S\x00\x00\x00\x00\x00"), Effect::Changed);
+        assert!(!m.buttons[0].available);
+        assert!(m.pending.is_none());
+        assert_eq!(m.error, None);
+        // HA reports the entity again
+        assert_eq!(m.apply(b"H1S\x00\x01\x64\x00\x01"), Effect::Changed);
+        assert!(m.buttons[0].available);
+        // an availability byte other than 0/1 is rejected
+        assert_eq!(m.apply(b"H1S\x01\x00\x00\x00\x02"), Effect::Ignored);
+        assert!(m.buttons[1].available);
     }
 
     #[test]

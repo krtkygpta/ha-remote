@@ -44,26 +44,31 @@ mod device {
                     let mut k = n;
                     val[k] = b'\n';
                     k += 1;
-                    let state: &[u8] = if b.on { b"ON" } else { b"OFF" };
-                    val[k..k + 2].copy_from_slice(state);
-                    k += 2;
-                    if b.is_dimmer() {
-                        val[k] = b' ';
-                        k += 1;
-                        let v = b.value.min(100);
-                        if v >= 100 {
-                            val[k..k + 3].copy_from_slice(b"100");
-                            k += 3;
-                        } else if v >= 10 {
-                            val[k] = b'0' + v / 10;
-                            val[k + 1] = b'0' + v % 10;
-                            k += 2;
-                        } else {
-                            val[k] = b'0' + v;
+                    if !b.available {
+                        val[k..k + 8].copy_from_slice(b"INACTIVE");
+                        k += 8;
+                    } else {
+                        let state: &[u8] = if b.on { b"ON" } else { b"OFF" };
+                        val[k..k + 2].copy_from_slice(state);
+                        k += 2;
+                        if b.is_dimmer() {
+                            val[k] = b' ';
+                            k += 1;
+                            let v = b.value.min(100);
+                            if v >= 100 {
+                                val[k..k + 3].copy_from_slice(b"100");
+                                k += 3;
+                            } else if v >= 10 {
+                                val[k] = b'0' + v / 10;
+                                val[k + 1] = b'0' + v % 10;
+                                k += 2;
+                            } else {
+                                val[k] = b'0' + v;
+                                k += 1;
+                            }
+                            val[k] = b'%';
                             k += 1;
                         }
-                        val[k] = b'%';
-                        k += 1;
                     }
                     core::str::from_utf8(&val[..k]).unwrap_or("")
                 }

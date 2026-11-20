@@ -269,7 +269,8 @@ class CompanionService : Service() {
             if (ha == null) {
                 val cached = prefs.getBoolean("state_" + slot, false)
                 val cachedValue = prefs.getInt("brightness_$slot", if (cached) 100 else 0)
-                runCatching { link.send(WatchAppProtocol.state(slot, cached, cachedValue, 1)) }
+                val cachedAvail = prefs.getBoolean("avail_$slot", true)
+                runCatching { link.send(WatchAppProtocol.state(slot, cached, cachedValue, 1, cachedAvail)) }
                 prefs.edit().putBoolean("state_" + slot, cached).apply()
                 return
             }
@@ -279,18 +280,20 @@ class CompanionService : Service() {
                 ha.awaitState(entity, toggle.on)
             }
             val st = runCatching { ha.state(entity) }
-                .getOrDefault(HaApi.EntityState(toggle.on, if (toggle.on) 100 else 0))
+                .getOrDefault(HaApi.EntityState(false, 0, available = false))
             prefs.edit()
                 .putBoolean("state_$slot", st.on)
                 .putInt("brightness_$slot", st.value)
+                .putBoolean("avail_$slot", st.available)
                 .apply()
-            link.send(WatchAppProtocol.state(slot, st.on, st.value, if (confirmed) 0 else 2))
+            link.send(WatchAppProtocol.state(slot, st.on, st.value, if (confirmed) 0 else 2, st.available))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             val cached = prefs.getBoolean("state_" + slot, false)
             val cachedValue = prefs.getInt("brightness_$slot", if (cached) 100 else 0)
-            runCatching { link.send(WatchAppProtocol.state(slot, cached, cachedValue, 1)) }
+            runCatching { link.send(WatchAppProtocol.state(slot, cached, cachedValue, 1, false)) }
+            prefs.edit().putBoolean("avail_$slot", false).apply()
         } finally {
             busy.set(false)
         }
@@ -318,7 +321,8 @@ class CompanionService : Service() {
             if (ha == null) {
                 val cachedOn = prefs.getBoolean("state_$slot", false)
                 val cachedValue = prefs.getInt("brightness_$slot", if (cachedOn) 100 else 0)
-                runCatching { link.send(WatchAppProtocol.state(slot, cachedOn, cachedValue, 1)) }
+                val cachedAvail = prefs.getBoolean("avail_$slot", true)
+                runCatching { link.send(WatchAppProtocol.state(slot, cachedOn, cachedValue, 1, cachedAvail)) }
                 return
             }
             val entity = prefs.getString("entity$slot", "")!!.trim()
@@ -327,18 +331,20 @@ class CompanionService : Service() {
                 ha.awaitBrightness(entity, request.value)
             }
             val st = runCatching { ha.state(entity) }
-                .getOrDefault(HaApi.EntityState(request.value > 0, request.value))
+                .getOrDefault(HaApi.EntityState(false, 0, available = false))
             prefs.edit()
                 .putBoolean("state_$slot", st.on)
                 .putInt("brightness_$slot", st.value)
+                .putBoolean("avail_$slot", st.available)
                 .apply()
-            link.send(WatchAppProtocol.state(slot, st.on, st.value, if (confirmed) 0 else 2))
+            link.send(WatchAppProtocol.state(slot, st.on, st.value, if (confirmed) 0 else 2, st.available))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             val cachedOn = prefs.getBoolean("state_$slot", false)
             val cachedValue = prefs.getInt("brightness_$slot", if (cachedOn) 100 else 0)
-            runCatching { link.send(WatchAppProtocol.state(slot, cachedOn, cachedValue, 1)) }
+            runCatching { link.send(WatchAppProtocol.state(slot, cachedOn, cachedValue, 1, false)) }
+            prefs.edit().putBoolean("avail_$slot", false).apply()
         } finally {
             busy.set(false)
         }
@@ -391,22 +397,37 @@ class CompanionService : Service() {
             val entity = prefs.getString("entity$i", "")!!.trim()
             val read = runCatching { withContext(Dispatchers.IO) { ha.state(entity) } }
             val state = read.getOrNull()
-            if (state == null) {
+            if (state == null || !state.available) {
+                // No data for this entity: the device lost power or was deleted. Mark the
+                // watch row Inactive once, then leave it until HA reports it again.
                 unavailable++
-                if (force) {
+                val wasAvailable = prefs.getBoolean("avail_$i", true)
+                if (force || wasAvailable) {
                     val cachedOn = prefs.getBoolean("state_$i", false)
                     val cachedValue = prefs.getInt("brightness_$i", if (cachedOn) 100 else 0)
-                    if (link.send(WatchAppProtocol.state(i, cachedOn, cachedValue, 1)) != WatchLink.STATUS_OK) error("State update failed")
+                    val on = state?.on ?: cachedOn
+                    val value = state?.value ?: cachedValue
+                    val result = if (read.isSuccess) 0 else 1
+                    runCatching { link.send(WatchAppProtocol.state(i, on, value, result, false)) }
+                    prefs.edit()
+                        .putBoolean("avail_$i", false)
+                        .putBoolean("state_$i", on)
+                        .putInt("brightness_$i", value)
+                        .apply()
                 }
                 continue
             }
             val changed = prefs.getBoolean("state_$i", !state.on) != state.on ||
-                prefs.getInt("brightness_$i", if (state.on) 100 else 0) != state.value
+                prefs.getInt("brightness_$i", if (state.on) 100 else 0) != state.value ||
+                !prefs.getBoolean("avail_$i", true)
             if (force || changed) {
                 // A failed push is retried by the next sync; never let it escape and crash.
-                runCatching { link.send(WatchAppProtocol.state(i, state.on, state.value, if (read.isSuccess) 0 else 1)) }
+                runCatching { link.send(WatchAppProtocol.state(i, state.on, state.value, if (read.isSuccess) 0 else 1, true)) }
                 if (read.isSuccess) {
-                    prefs.edit().putBoolean("state_$i", state.on).putInt("brightness_$i", state.value).apply()
+                    prefs.edit().putBoolean("state_$i", state.on)
+                        .putInt("brightness_$i", state.value)
+                        .putBoolean("avail_$i", true)
+                        .apply()
                 }
             }
         }

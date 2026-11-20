@@ -62,7 +62,8 @@ class CompanionProtocolTest {
         assertEquals(WatchAppProtocol.Brightness(5, 7, 80), WatchAppProtocol.parseBrightness(hex("483142050750")))
         assertNull(WatchAppProtocol.parseBrightness(hex("483142050765")))
         assertArrayEquals(byteArrayOf('H'.code.toByte(), '1'.code.toByte(), 'E'.code.toByte(), 7, 1), WatchAppProtocol.error(7, 1))
-        assertArrayEquals(byteArrayOf('H'.code.toByte(), '1'.code.toByte(), 'S'.code.toByte(), 2, 1, 65, 0), WatchAppProtocol.state(2, true, 65, 0))
+        assertArrayEquals(byteArrayOf('H'.code.toByte(), '1'.code.toByte(), 'S'.code.toByte(), 2, 1, 65, 0, 1), WatchAppProtocol.state(2, true, 65, 0, true))
+        assertArrayEquals(byteArrayOf('H'.code.toByte(), '1'.code.toByte(), 'S'.code.toByte(), 1, 0, 0, 1, 0), WatchAppProtocol.state(1, false, 0, 1, false))
         assertArrayEquals(byteArrayOf('H'.code.toByte(), '1'.code.toByte(), 'P'.code.toByte()), WatchAppProtocol.heartbeat())
         assertArrayEquals(byteArrayOf('H'.code.toByte(), '1'.code.toByte(), 'W'.code.toByte(), (-22).toByte()), WatchAppProtocol.widgetStatus(-22))
     }

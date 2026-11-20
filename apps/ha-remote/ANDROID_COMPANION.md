@@ -42,7 +42,7 @@ phone-local.
 | Watch → phone | `H1B seq slot value` | Brightness request, `value 0..=100`, dimmer slots only |
 | Phone → watch | `H1A seq` | Command accepted; pending remains until `H1S` |
 | Phone → watch | `H1P` | Companion heartbeat (10 s) |
-| Phone → watch | `H1S slot on value result` | Authoritative state; `value` is brightness percent, result `0` confirmed, nonzero generic failure |
+| Phone → watch | `H1S slot on value result available` | Authoritative state; `value` is brightness percent, result `0` confirmed, nonzero generic failure, `available 0` means HA has no data for the entity (device lost power): the watch greys the row and shows **Inactive** |
 | Phone → watch | `H1E seq error_code` | Generic failure; never include HA response text or entity data |
 | Watch → phone | `H1W result` | Runtime result from `Api::widget` |
 
@@ -57,6 +57,10 @@ Watch config persistence uses a versioned `D3` blob: count, the five favorites, 
 `enabled, kind, on, value, len, name[15], sec_len, section[10]`. The old `D2` five-slot blob is migrated on load
 (kind toggle, value mirrors on/off). Android remains authoritative and resends config and fresh states after every
 HELLO.
+
+State frames may be 6 bytes (legacy), 7 bytes (no availability byte) or 8 bytes (current); a missing availability
+byte means available. An unavailable push is a device state, not an app error: the watch clears any pending command,
+keeps the last on/value, and shows the row as Inactive until HA reports the entity again.
 
 ## Android app behavior
 

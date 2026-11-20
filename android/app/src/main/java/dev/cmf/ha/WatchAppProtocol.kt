@@ -106,13 +106,14 @@ internal object WatchAppProtocol {
     fun error(sequence: Int, code: Int) =
         byteArrayOf('H'.code.toByte(), '1'.code.toByte(), 'E'.code.toByte(), sequence.toByte(), code.toByte())
 
-    /** Authoritative state: on/off, brightness percent (mirrors on for toggles), result. */
-    fun state(slot: Int, on: Boolean, value: Int, result: Int) =
+    /** Authoritative state: on/off, brightness percent, result, and HA availability. */
+    fun state(slot: Int, on: Boolean, value: Int, result: Int, available: Boolean) =
         byteArrayOf(
             'H'.code.toByte(), '1'.code.toByte(), 'S'.code.toByte(),
             slot.toByte(),
             if (on) 1 else 0,
             value.coerceIn(0, 100).toByte(),
-            result.toByte()
+            result.toByte(),
+            if (available) 1 else 0
         )
 }
