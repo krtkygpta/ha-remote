@@ -14,8 +14,8 @@ fn main() {}
 #[cfg(any(target_os = "none", wp2_sim))]
 mod device {
     use crate::proto::{self, Effect, MAX_BUTTONS, Model};
-    use crate::screen::{Mode, Screen, View, FONT_BIG};
-    use cmf_wp2_app::lv::{Batch, Lv, StockFont};
+    use crate::screen::{Mode, Screen, View};
+    use cmf_wp2_app::lv::{Batch, Lv};
     use cmf_wp2_app::{Api, BUTTON, CROWN, LV, MSG_MAX, PAUSE, RESUME, stock};
 
     cmf_wp2_app::entry!(main);
@@ -91,7 +91,6 @@ mod device {
         api.own_back(true);
         let Some(mut batch) = Batch::new() else { return 6 };
         if stock::font(&mut batch)
-            .and_then(|_| batch.font(FONT_BIG, StockFont::F48M))
             .and_then(|_| batch.submit(&lv))
             .is_err()
         {

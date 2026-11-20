@@ -18,10 +18,8 @@ const KNOB: i32 = 24;
 const PCT_W: i32 = 84;
 /// The dimmer page's capsule: like the firmware's volume slider, no knob nub.
 const TRACK_W: i32 = 80;
-const TRACK_H: i32 = 250;
-
-/// Font slot for the slider page's big percent number; opened beside the system font.
-pub(crate) const FONT_BIG: u8 = 1;
+/// Tall like the firmware volume capsule; no text on the page, so it sits centered.
+const TRACK_H: i32 = 300;
 
 /// Which surface is showing: the Apps row / face page list, or a device's slider page.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -46,7 +44,6 @@ pub(crate) struct Screen {
     pub(crate) rows: [Obj; MAX_BUTTONS],
     // slider surface
     slider: Obj,
-    value_label: Obj,
     /// The white fill (round pill + square cap) drawn instead of LVGL's indicator/knob.
     fill: Obj,
     fill_cap: Obj,
@@ -227,7 +224,6 @@ impl Screen {
             icon_kinds: [0; MAX_BUTTONS],
             rows: [ROOT; MAX_BUTTONS],
             slider: ROOT,
-            value_label: ROOT,
             fill: ROOT,
             fill_cap: ROOT,
             slider_slot: 0xFF,
@@ -348,24 +344,9 @@ impl Screen {
 
         let mut s = Self::empty(mode, View::Slider, page);
         s.slider_slot = slot as u8;
-        let title = b.create(Class::Label, page)?;
-        b.size(title, stock::ROW_W, 72)?;
-        b.style(title, Prop::TextColor, 0, stock::WHITE)?;
-        b.style(title, Prop::TextAlign, 0, 2)?;
-        b.align(title, Align::Center, 0, -170)?;
-        b.text(title, m.buttons[slot].label())?;
-
-        let mut pbuf = [0u8; 5];
-        s.value_label = b.create(Class::Label, page)?;
-        b.size(s.value_label, 240, 80)?;
-        b.style(s.value_label, Prop::TextFont, 0, FONT_BIG as i32)?;
-        b.style(s.value_label, Prop::TextAlign, 0, 2)?;
-        b.align(s.value_label, Align::Center, 0, -88)?;
-        b.text(s.value_label, pct_text(m.buttons[slot].value, &mut pbuf))?;
-
         s.slider = b.create(Class::Slider, page)?;
         b.size(s.slider, TRACK_W, TRACK_H)?;
-        b.align(s.slider, Align::Center, 0, 46)?;
+        b.align(s.slider, Align::Center, 0, 0)?;
         b.range(s.slider, 0, 100)?;
         b.value(s.slider, m.buttons[slot].value.min(100) as i32, false)?;
         // Capsule track; LVGL's indicator and knob are hidden (the knob stays draggable but
@@ -392,8 +373,8 @@ impl Screen {
         b.flags(s.fill_cap, &[], &[Flag::Clickable, Flag::Scrollable])?;
         // A small brightness sun at each end, like the volume slider's speaker icons:
         // grey on the dark track, black on the white fill.
-        Self::sun(b, s.slider, 0, -70, stock::GREY)?;
-        Self::sun(b, s.slider, 0, 85, stock::BLACK)?;
+        Self::sun(b, s.slider, 0, -((TRACK_H / 2 - 48) as i16), stock::GREY)?;
+        Self::sun(b, s.slider, 0, (TRACK_H / 2 - 48) as i16, stock::BLACK)?;
         Self::set_fill(b, s.fill, s.fill_cap, m.buttons[slot].value)?;
         Ok(s)
     }
@@ -521,8 +502,6 @@ impl Screen {
                 let i = self.slider_slot as usize;
                 if i >= MAX_BUTTONS { return Ok(()); }
                 let value = m.buttons[i].value.min(100);
-                let mut pbuf = [0u8; 5];
-                b.text(self.value_label, pct_text(value, &mut pbuf))?;
                 b.value(self.slider, value as i32, false)?;
                 Self::set_fill(b, self.fill, self.fill_cap, value)?;
                 Ok(())
@@ -587,14 +566,12 @@ impl Screen {
 mod tests {
     use super::*;
     use crate::proto::{Effect, KIND_DIMMER, NO_FAVORITE};
-    use cmf_wp2_app::lv::StockFont;
     use wp2_core::lvcmd::{self, Table};
 
-    const FONTS: u8 = (1 << stock::FONT) | (1 << FONT_BIG);
+    const FONTS: u8 = 1 << stock::FONT;
 
     fn open_fonts(b: &mut Batch) {
         stock::font(b).unwrap();
-        b.font(FONT_BIG, StockFont::F48M).unwrap();
     }
 
     fn validate_and_apply(b: &mut Batch, table: &mut Table) -> Result<(), LvError> {

@@ -1,6 +1,6 @@
 name = "Home Assistant"
 summary = "Control up to ten Home Assistant entities from your watch, with brightness sliders"
-version = "0.2.3"
+version = "0.2.4"
 author = "CMF Tech Community"
 screenshots = ["shots/watch.jpg"]
 
