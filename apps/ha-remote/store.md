@@ -1,7 +1,7 @@
 Control up to ten Home Assistant entities from the wrist: lights, switches, fans, plugs, anything that turns on and off. The Android companion lists every entity in your Home Assistant; you pick each control's kind, short watch name and section, and the watch shows them grouped and centered.
 
 - **Toggle rows** show a stock switch for on/off controls.
-- **Lights are one tap for 0/100 and a long press for the dimmer page**: a thick vertical slider you can drag or turn with the crown, like the settings volume slider; the phone confirms the real state back.
+- **Lights are one tap for 0/100 and a long press for the dimmer page**: a knob-free vertical capsule — dark track, white fill, drag or crown — the same shape as the settings volume slider; the phone confirms the real state back.
 - **Up to five favorites** live on the page next to the watch face and the widget card; everything else stays in the Apps row.
 - **Inactive** appears when Home Assistant has no data for a device (it lost power): the row greys out instead of failing, and comes back when the device does.
 

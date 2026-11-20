@@ -16,6 +16,9 @@ const SWITCH_W: i32 = 56;
 const SWITCH_H: i32 = 28;
 const KNOB: i32 = 24;
 const PCT_W: i32 = 84;
+/// The dimmer page's capsule: like the firmware's volume slider, no knob nub.
+const TRACK_W: i32 = 80;
+const TRACK_H: i32 = 250;
 
 /// Font slot for the slider page's big percent number; opened beside the system font.
 pub(crate) const FONT_BIG: u8 = 1;
@@ -44,6 +47,9 @@ pub(crate) struct Screen {
     // slider surface
     slider: Obj,
     value_label: Obj,
+    /// The white fill (round pill + square cap) drawn instead of LVGL's indicator/knob.
+    fill: Obj,
+    fill_cap: Obj,
     /// The slot whose slider page is open (0xFF on the list).
     pub(crate) slider_slot: u8,
 }
@@ -222,6 +228,8 @@ impl Screen {
             rows: [ROOT; MAX_BUTTONS],
             slider: ROOT,
             value_label: ROOT,
+            fill: ROOT,
+            fill_cap: ROOT,
             slider_slot: 0xFF,
         }
     }
@@ -356,23 +364,71 @@ impl Screen {
         b.text(s.value_label, pct_text(m.buttons[slot].value, &mut pbuf))?;
 
         s.slider = b.create(Class::Slider, page)?;
-        b.size(s.slider, 104, 236)?;
-        b.align(s.slider, Align::Center, 0, 54)?;
+        b.size(s.slider, TRACK_W, TRACK_H)?;
+        b.align(s.slider, Align::Center, 0, 46)?;
         b.range(s.slider, 0, 100)?;
         b.value(s.slider, m.buttons[slot].value.min(100) as i32, false)?;
-        for (part, colour) in [
-            (0, stock::LETTER_BG),
-            (stock::INDICATOR, stock::WHITE),
-            (stock::KNOB, stock::WHITE),
-        ] {
-            b.style(s.slider, Prop::BgColor, part, colour)?;
-            b.style(s.slider, Prop::BgOpa, part, 255)?;
-            b.style(s.slider, Prop::Radius, part, stock::CIRCLE)?;
-        }
-        b.style(s.slider, Prop::BorderWidth, stock::KNOB, 6)?;
-        b.style(s.slider, Prop::BorderColor, stock::KNOB, stock::BLACK)?;
+        // Capsule track; LVGL's indicator and knob are hidden (the knob stays draggable but
+        // invisible), and the white level is two children: round pill + square cap.
+        b.style(s.slider, Prop::BgColor, 0, stock::LETTER_BG)?;
+        b.style(s.slider, Prop::BgOpa, 0, 255)?;
+        b.style(s.slider, Prop::Radius, 0, stock::CIRCLE)?;
+        b.style(s.slider, Prop::BgOpa, stock::INDICATOR, 0)?;
+        b.style(s.slider, Prop::BgOpa, stock::KNOB, 0)?;
+        b.style(s.slider, Prop::BorderWidth, stock::KNOB, 0)?;
         b.events(s.slider, &[Ev::ValueChanged])?;
+
+        s.fill = b.create(Class::Obj, s.slider)?;
+        b.style(s.fill, Prop::BgColor, 0, stock::WHITE)?;
+        b.style(s.fill, Prop::BgOpa, 0, 255)?;
+        b.style(s.fill, Prop::Radius, 0, stock::CIRCLE)?;
+        b.style(s.fill, Prop::BorderWidth, 0, 0)?;
+        b.flags(s.fill, &[], &[Flag::Clickable, Flag::Scrollable])?;
+        s.fill_cap = b.create(Class::Obj, s.slider)?;
+        b.style(s.fill_cap, Prop::BgColor, 0, stock::WHITE)?;
+        b.style(s.fill_cap, Prop::BgOpa, 0, 255)?;
+        b.style(s.fill_cap, Prop::Radius, 0, 0)?;
+        b.style(s.fill_cap, Prop::BorderWidth, 0, 0)?;
+        b.flags(s.fill_cap, &[], &[Flag::Clickable, Flag::Scrollable])?;
+        // A small brightness sun at each end, like the volume slider's speaker icons:
+        // grey on the dark track, black on the white fill.
+        Self::sun(b, s.slider, 0, -70, stock::GREY)?;
+        Self::sun(b, s.slider, 0, 85, stock::BLACK)?;
+        Self::set_fill(b, s.fill, s.fill_cap, m.buttons[slot].value)?;
         Ok(s)
+    }
+
+    /// The white level: a round-bottom pill with a square cap over its rounded top, so the
+    /// fill matches the firmware slider (flat surface, capsule bottom).
+    fn set_fill(b: &mut Batch, fill: Obj, cap: Obj, value: u8) -> Result<(), LvError> {
+        let h = (TRACK_H * value.min(100) as i32) / 100;
+        if h <= 0 {
+            b.flags(fill, &[Flag::Hidden], &[])?;
+            b.flags(cap, &[Flag::Hidden], &[])?;
+            return Ok(());
+        }
+        b.flags(fill, &[], &[Flag::Hidden])?;
+        b.size(fill, TRACK_W, h)?;
+        b.align(fill, Align::Center, 0, (TRACK_H / 2 - h / 2) as i16)?;
+        let cap_h = (TRACK_W / 2).min(h / 2).max(1);
+        b.size(cap, TRACK_W, cap_h)?;
+        b.align(cap, Align::Center, 0, (TRACK_H / 2 - (h - cap_h / 2)) as i16)?;
+        b.flags(cap, &[], &[Flag::Hidden])?;
+        Ok(())
+    }
+
+    /// A four-ray sun: a filled circle crossed by two thin bars.
+    fn sun(
+        b: &mut Batch,
+        parent: Obj,
+        x: i16,
+        y: i16,
+        colour: i32,
+    ) -> Result<(), LvError> {
+        glyph_piece(b, parent, 26, 26, x, y, stock::CIRCLE, colour)?;
+        glyph_piece(b, parent, 6, 46, x, y, 3, colour)?;
+        glyph_piece(b, parent, 46, 6, x, y, 3, colour)?;
+        Ok(())
     }
 
     /// Deletes the current screen (its page, with every object and its scroll bar), like
@@ -468,6 +524,7 @@ impl Screen {
                 let mut pbuf = [0u8; 5];
                 b.text(self.value_label, pct_text(value, &mut pbuf))?;
                 b.value(self.slider, value as i32, false)?;
+                Self::set_fill(b, self.fill, self.fill_cap, value)?;
                 Ok(())
             }
             View::List => {
