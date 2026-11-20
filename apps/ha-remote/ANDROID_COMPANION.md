@@ -12,9 +12,12 @@ The configured short button labels are sent over BLE to be shown on the watch; k
 2. Resolve the already bonded WP2 and use `connectGatt` to its existing GATT identity while Nothing X is active.
    Android coexistence with Nothing X is a required hardware validation. If Android cannot maintain the second GATT
    client on a phone model, report that combination as unsupported instead of rebinding or disconnecting Nothing X.
-3. Subscribe to notify UUIDs `0000FFF1-0000-1000-8000-00805F9B34FB` and
-   `77D4FF02-2FE2-2334-0D35-9CCD078F529C`; write to `FFF2` and shell `77D4FF01-2FE2-2334-0D35-9CCD078F529C`.
-   Accumulate shell notifications until the complete `GETSECRET:<32 hex>,OK` response arrives.
+3. Subscribe to notify UUIDs `0000FFF1-0000-1000-8000-00805F9B34FB`,
+   `77D4FF02-2FE2-2334-0D35-9CCD078F529C`, and
+   `02F00000-0000-0000-0000-00000000FFE2`; write to `FFF2` and shell
+   `77D4FF01-2FE2-2334-0D35-9CCD078F529C`. The data-notify subscription is the stock firmware's
+   phone-ready signal, so wait briefly after the third subscription before reading K. Accumulate shell
+   notifications until the complete `GETSECRET:<32 hex>,OK` response arrives and retry that read after a reconnect.
 4. Treat K as a password. This companion keeps K in memory only and clears it when the GATT session closes; never
    log, export, sync, or put it in a project file. Nothing personal goes over this channel.
 5. Send one encrypted channel `PING` (`0x90A7`) under K to register. Encode/decode channel frames as specified in

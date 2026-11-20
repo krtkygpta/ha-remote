@@ -15,6 +15,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
@@ -54,6 +55,7 @@ class WatchLink(context: Context, private val device: BluetoothDevice) {
 
     private val callback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+            if (g !== gatt) return
             if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
                 connectedOnce?.complete(true)
                 return
@@ -63,19 +65,23 @@ class WatchLink(context: Context, private val device: BluetoothDevice) {
             connected = false
         }
 
-        override fun onServicesDiscovered(g: BluetoothGatt, status: Int) { op?.complete(status) }
+        override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            if (g === gatt) op?.complete(status)
+        }
 
         override fun onMtuChanged(g: BluetoothGatt, value: Int, status: Int) {
-            if (status == 0) mtu = value
-            op?.complete(status)
+            if (g === gatt) {
+                if (status == 0) mtu = value
+                op?.complete(status)
+            }
         }
 
         override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
-            op?.complete(status)
+            if (g === gatt) op?.complete(status)
         }
 
         override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
-            op?.complete(status)
+            if (g === gatt) op?.complete(status)
         }
 
         override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray) {
@@ -91,6 +97,10 @@ class WatchLink(context: Context, private val device: BluetoothDevice) {
                     }
                 }
                 SHELL_N -> shell.trySend(value)
+                // The stock firmware uses the data notification subscription as the
+                // "phone ready" signal. It is not part of our protocol, but it must
+                // be subscribed to before the shell starts answering reliably.
+                DATA_N -> Unit
             }
         }
 
@@ -105,11 +115,15 @@ class WatchLink(context: Context, private val device: BluetoothDevice) {
         val g = gatt ?: error("Bluetooth link unavailable")
         val done = CompletableDeferred<Int>()
         op = done
-        repeat(50) {
-            if (start(g)) return withTimeout(6000) { done.await() }
-            delay(20)
+        try {
+            repeat(50) {
+                if (start(g)) return withTimeout(6000) { done.await() }
+                delay(20)
+            }
+            error("Bluetooth operation could not start")
+        } finally {
+            if (op === done) op = null
         }
-        error("Bluetooth operation could not start")
     }
 
     private fun characteristic(id: UUID) =
@@ -161,9 +175,31 @@ class WatchLink(context: Context, private val device: BluetoothDevice) {
         write(SHELL_W, "$command\r\n".toByteArray())
         val out = StringBuilder()
         withTimeout(7000) {
-            while (!out.contains("OK") && !out.contains("ERROR")) out.append(String(shell.receive()))
+            while (!out.contains("OK") && !out.contains("ERROR") && !out.contains("FAIL")) {
+                out.append(String(shell.receive(), Charsets.UTF_8))
+            }
         }
         return out.toString()
+    }
+
+    /** The shell can be silent for a short period after a reconnect. */
+    private suspend fun readChannelKey(): ByteArray {
+        var lastFailure: Throwable? = null
+        repeat(3) { attempt ->
+            try {
+                val reply = at("AT GETSECRET")
+                val match = Regex("GETSECRET:([0-9A-Fa-f]{32})").find(reply)
+                if (match != null) {
+                    val hex = match.groupValues[1]
+                    return ByteArray(16) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
+                }
+                lastFailure = IllegalStateException("Unexpected GETSECRET response")
+            } catch (e: TimeoutCancellationException) {
+                lastFailure = e
+            }
+            if (attempt < 2) delay(500)
+        }
+        throw IllegalStateException("No channel key; the firmware needs the stub with K", lastFailure)
     }
 
     /** Connects and reads K. Throws with a short reason when any step fails. */
@@ -173,15 +209,16 @@ class WatchLink(context: Context, private val device: BluetoothDevice) {
         if (withTimeoutOrNull(15_000) { connectedOnce?.await() } != true) error("Could not connect to the bonded watch")
         runCatching { operation { it.requestMtu(247) } }
         if (operation { it.discoverServices() } != BluetoothGatt.GATT_SUCCESS) error("Watch service discovery failed")
-        for (id in listOf(CMD_W, CMD_N, SHELL_W, SHELL_N)) {
+        for (id in listOf(CMD_W, CMD_N, SHELL_W, SHELL_N, DATA_N)) {
             if (characteristic(id) == null) error("Watch channel service not found")
         }
         subscribe(CMD_N)
         subscribe(SHELL_N)
-        val reply = at("AT GETSECRET")
-        val match = Regex("GETSECRET:([0-9A-Fa-f]{32})").find(reply)
-            ?: error("No channel key; the firmware needs the stub with K")
-        key = ByteArray(16) { match.groupValues[1].substring(it * 2, it * 2 + 2).toInt(16).toByte() }
+        // This third subscription is intentionally part of the handshake. The stock
+        // firmware marks the phone ready only after it is enabled.
+        subscribe(DATA_N)
+        delay(600)
+        key = readChannelKey()
         connected = true
         if (ping() == null) error("The firmware channel did not answer")
         stubInfo = CompanionProtocol.parseStubInfo(request(CompanionProtocol.INFO, byteArrayOf(0xFE.toByte())))
@@ -253,5 +290,6 @@ class WatchLink(context: Context, private val device: BluetoothDevice) {
         private val CMD_N = UUID.fromString("0000fff1-0000-1000-8000-00805f9b34fb")
         private val SHELL_W = UUID.fromString("77d4ff01-2fe2-2334-0d35-9ccd078f529c")
         private val SHELL_N = UUID.fromString("77d4ff02-2fe2-2334-0d35-9ccd078f529c")
+        private val DATA_N = UUID.fromString("02f00000-0000-0000-0000-00000000ffe2")
     }
 }

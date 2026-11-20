@@ -10,7 +10,10 @@ Pair the watch once in Nothing X. In this app, select the already bonded watch a
 Android GATT client (`connectGatt`) and uses the encrypted app channel key K without starting another pairing or
 bind handshake. This exact pattern is implemented in the public [Vela Android GATT session](https://github.com/arunk140/esp32-vela/blob/main/app/src/main/java/app/vela/device/watch/WatchSession.kt): it calls `connectGatt` on the bonded watch, reads K with `AT GETSECRET`, and uses the app channel. The author reports Vela and Nothing X operating together on one phone/watch pair in the [project thread](https://www.reddit.com/r/CMFTech/comments/1xynmyv/comment/19ss2wcvl0sro/?context=1&screen_view_count=8). That demonstrates the setup can work; Android Bluetooth behavior can still vary, so verify the particular phone/watch pair.
 
-Our `WatchLink` follows the SDK protocol independently: LE GATT to the existing bonded identity, shell read of K, encrypted channel requests, and no new bond or bind. It also checks the running stub's widget capability and reconnects after a dropped link. Vela's source is a behavioral reference; this project does not copy its implementation.
+Our `WatchLink` follows the SDK protocol independently: LE GATT to the existing bonded identity, the stock
+data-notify phone-ready subscription, shell read of K, encrypted channel requests, and no new bond or bind. It
+also checks the running stub's widget capability and reconnects after a dropped link. Vela's source is a behavioral
+reference; this project does not copy its implementation.
 
 ## Build
 
