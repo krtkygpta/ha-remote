@@ -1,18 +1,15 @@
-Control up to five Home Assistant lights or groups. Configure each button in the Android companion app, give it a name, and tap its row on the watch to request a toggle. The phone sends Home Assistant commands and confirms the resulting state back to the watch.
+Control up to ten Home Assistant entities from the wrist: lights, switches, fans, plugs, anything that turns on and off. The Android companion lists every entity in your Home Assistant; you pick each control's kind, short watch name and section, and the watch shows them grouped and centered.
 
-Next to the watch face it offers two optional surfaces, both added by long-pressing the app in Apps:
+- **Toggle rows** show a stock switch for on/off controls.
+- **Brightness sliders** for lights work like the watch's volume slider: drag on the row to dim the bulb, and the phone confirms the real state back.
+- **Up to five favorites** live on the page next to the watch face and the widget card; everything else stays in the Apps row.
 
-- **Add page**: the same screen as the app, living next to the face — same rows, icons and
-  arc scrolling, and touching a row toggles it right there.
-- **Add widget**: a text card showing the favorite's name and state. A card is drawn by
-  the stock firmware and a tap starts the app; the toggling happens on the page.
+The phone is the only Home Assistant client: it sends commands over the encrypted app channel and reports the confirmed state, including changes made from other apps.
 
 ## Requirements
 
-- FMC patched firmware/App Loader with channel key K support (2026-11-13 or later). The optional page and widget need
-  firmware stub v4+ and a loader from 2026-11-15 or later.
-- The HA Watch Remote Android companion app on the same phone as Nothing X. The companion connects to the watch's existing bonded BLE identity without rebinding, obtains the channel key K through the shell service, and sends commands through the encrypted app channel. Android's second-GATT-client coexistence with Nothing X must be validated on the target phone/watch combination.
-  Companion source and builds: <https://github.com/krtkygpta/ha-remote>.
-- A Home Assistant instance configured in the Android companion app.
+- FMC patched firmware/App Loader with channel key K support (2026-11-13 or later). The optional page and widget need firmware stub v4+ and a loader from 2026-11-15 or later.
+- The Home Assistant companion app v0.3.0 or later on the same phone as Nothing X: <https://github.com/krtkygpta/ha-remote/releases>. It connects to the watch's existing bonded BLE identity without rebinding and sends commands through the encrypted app channel.
+- A Home Assistant instance configured in the companion app.
 
-The BLE app channel is readable by any nearby BLE client that can obtain the pairing secret. Do not send credentials or personal data over it. The app protocol carries button indexes, states, and generic error codes only.
+The BLE app channel is readable by any nearby BLE client that can obtain the pairing secret. Do not send credentials or personal data over it. The app protocol carries slot indexes, short labels, states and generic error codes only.

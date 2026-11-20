@@ -8,6 +8,9 @@ import java.net.URL
 /** Home Assistant REST calls. Blocking; call from a background dispatcher. */
 class HaApi(private val base: String, private val token: String) {
 
+    /** on/off plus brightness percent (0..=100; for non-dimmable entities 0 or 100). */
+    data class EntityState(val on: Boolean, val value: Int)
+
     private fun request(path: String, method: String = "GET", json: JSONObject? = null): String {
         val connection = URL(base.trimEnd('/') + path).openConnection() as HttpURLConnection
         try {
@@ -32,37 +35,72 @@ class HaApi(private val base: String, private val token: String) {
 
     fun validate() { request("/api/") }
 
-    /** All light entities and light groups, as (entity_id, friendly_name). */
+    /** Every entity in Home Assistant, as (entity_id, friendly_name). */
     fun entities(): List<Pair<String, String>> = JSONArray(request("/api/states")).let { states ->
         (0 until states.length()).mapNotNull { i ->
             val state = states.optJSONObject(i) ?: return@mapNotNull null
             val id = state.optString("entity_id")
-            val attributes = state.optJSONObject("attributes")
-            val isLight = id.startsWith("light.")
-            val members = attributes?.optJSONArray("entity_id")
-            val isLightGroup = id.startsWith("group.") && members != null &&
-                (0 until members.length()).any { members.optString(it).startsWith("light.") }
-            if (isLight || isLightGroup) id to attributes?.optString("friendly_name").orEmpty() else null
+            if (id.isBlank()) return@mapNotNull null
+            val name = state.optJSONObject("attributes")?.optString("friendly_name").orEmpty()
+            id to name
         }
     }
 
-    fun state(id: String): Boolean = when (val state = JSONObject(request("/api/states/$id")).optString("state")) {
-        "on" -> true
-        "off" -> false
-        else -> error("Home Assistant entity is unavailable ($state)")
+    fun state(id: String): EntityState {
+        val obj = JSONObject(request("/api/states/$id"))
+        val raw = obj.optString("state")
+        if (raw == "unavailable" || raw == "unknown") {
+            error("Home Assistant entity is unavailable ($raw)")
+        }
+        val on = raw == "on" || raw == "true" || raw == "open"
+        val brightness = obj.optJSONObject("attributes")?.optInt("brightness", -1) ?: -1
+        val value = when {
+            !on -> 0
+            brightness in 0..255 -> (brightness * 100 + 127) / 255
+            else -> 100
+        }
+        return EntityState(on, value.coerceIn(0, 100))
     }
 
+    /** Generic on/off: `homeassistant.turn_on/off` maps to each domain's own service. */
     fun set(id: String, on: Boolean) {
         val service = if (on) "turn_on" else "turn_off"
-        val domain = if (id.startsWith("group.")) "homeassistant" else "light"
-        request("/api/services/$domain/$service", "POST", JSONObject().put("entity_id", id))
+        request("/api/services/homeassistant/$service", "POST", JSONObject().put("entity_id", id))
+    }
+
+    /** Brightness percent for a `light.*` entity; 0 turns it off. */
+    fun setBrightness(id: String, percent: Int) {
+        require(id.startsWith("light.")) { "Only light entities are dimmable" }
+        val pct = percent.coerceIn(0, 100)
+        if (pct == 0) {
+            request("/api/services/light/turn_off", "POST", JSONObject().put("entity_id", id))
+        } else {
+            request(
+                "/api/services/light/turn_on",
+                "POST",
+                JSONObject().put("entity_id", id).put("brightness_pct", pct)
+            )
+        }
     }
 
     /** Waits until the entity reaches [on]; false on timeout. */
     fun awaitState(id: String, on: Boolean): Boolean {
         val deadline = System.nanoTime() + 5_000_000_000L
         do {
-            if (runCatching { state(id) }.getOrNull() == on) return true
+            if (runCatching { state(id).on }.getOrNull() == on) return true
+            Thread.sleep(350)
+        } while (System.nanoTime() < deadline)
+        return false
+    }
+
+    /** Waits until the reported brightness is within a few percent of [percent]. */
+    fun awaitBrightness(id: String, percent: Int): Boolean {
+        val target = percent.coerceIn(0, 100)
+        val deadline = System.nanoTime() + 5_000_000_000L
+        do {
+            val current = runCatching { state(id) }.getOrNull()
+            if (current != null && current.on && target > 0 && kotlin.math.abs(current.value - target) <= 3) return true
+            if (current != null && target == 0 && !current.on) return true
             Thread.sleep(350)
         } while (System.nanoTime() < deadline)
         return false

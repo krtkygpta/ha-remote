@@ -14,7 +14,7 @@ fn main() {}
 #[cfg(any(target_os = "none", wp2_sim))]
 mod device {
     use crate::proto::{self, Effect, MAX_BUTTONS, Model};
-    use crate::screen::Screen;
+    use crate::screen::{Mode, Screen};
     use cmf_wp2_app::lv::{Batch, Lv};
     use cmf_wp2_app::{Api, BUTTON, LV, MSG_MAX, PAUSE, RESUME, stock};
 
@@ -22,23 +22,22 @@ mod device {
     cmf_wp2_app::app_icon!();
     cmf_wp2_app::app_features!(cmf_wp2_app::WIDGET | cmf_wp2_app::PAGE);
 
-    static mut MODEL: Model = Model::new();
-    static mut STORE: [u8; 192] = [0; 192];
+    /// LVGL event codes the screen uses: a row tap, a slider drag.
+    const CLICKED: i16 = 7;
+    const VALUE_CHANGED: i16 = 28;
 
-    /// The widget card: a grey title line, white value lines (the control's name, then its
-    /// state). The card is text-only and a tap starts the app; the interactive toggles live
-    /// on the page next to the face.
+    static mut MODEL: Model = Model::new();
+    static mut STORE: [u8; 384] = [0; 384];
+
+    /// The widget card: the first favorite's name and state (or the first enabled control).
     fn update_widget(api: &Api, m: &Model) -> i32 {
-        let chosen = (m.fav != proto::NO_FAVORITE)
-            .then(|| m.buttons[m.fav as usize])
-            .filter(|b| b.enabled)
-            .or_else(|| m.buttons.iter().find(|b| b.enabled).copied());
+        let chosen = m.primary().and_then(|i| m.buttons.get(i)).copied();
         let mut val = [0u8; 40];
         let value = if !m.connected {
             "Phone offline"
         } else {
             match chosen {
-                Some(b) => {
+                Some(b) if b.enabled => {
                     let label = b.label();
                     let n = label.len().min(proto::NAME_MAX);
                     val[..n].copy_from_slice(&label.as_bytes()[..n]);
@@ -48,12 +47,27 @@ mod device {
                     let state: &[u8] = if b.on { b"ON" } else { b"OFF" };
                     val[k..k + 2].copy_from_slice(state);
                     k += 2;
-                    let tail: &[u8] = b" \xc2\xb7 tap to toggle";
-                    val[k..k + tail.len()].copy_from_slice(tail);
-                    k += tail.len();
+                    if b.is_dimmer() {
+                        val[k] = b' ';
+                        k += 1;
+                        let v = b.value.min(100);
+                        if v >= 100 {
+                            val[k..k + 3].copy_from_slice(b"100");
+                            k += 3;
+                        } else if v >= 10 {
+                            val[k] = b'0' + v / 10;
+                            val[k + 1] = b'0' + v % 10;
+                            k += 2;
+                        } else {
+                            val[k] = b'0' + v;
+                            k += 1;
+                        }
+                        val[k] = b'%';
+                        k += 1;
+                    }
                     core::str::from_utf8(&val[..k]).unwrap_or("")
                 }
-                None => "Set up in the phone app",
+                _ => "Set up in the phone app",
             }
         };
         api.widget("Home Assistant", value)
@@ -61,15 +75,10 @@ mod device {
 
     fn main(api: &'static Api) -> i32 {
         let Some(lv) = api.lv() else { return -95 };
-        let Some(mut batch) = Batch::new() else {
-            return -1;
-        };
-        if stock::font(&mut batch)
-            .and_then(|_| batch.submit(&lv))
-            .is_err()
-        {
-            return 1;
-        }
+        // Distinct from a panic (-1): the batch is only unavailable if a second instance
+        // of this app is already alive.
+        let Some(mut batch) = Batch::new() else { return 6 };
+        if stock::font(&mut batch).and_then(|_| batch.submit(&lv)).is_err() { return 1; }
         // SAFETY: a single app thread owns these static buffers.
         let m = unsafe { &mut *core::ptr::addr_of_mut!(MODEL) };
         let stored = unsafe { &mut *core::ptr::addr_of_mut!(STORE) };
@@ -77,14 +86,10 @@ mod device {
         if n > 0 {
             m.load(&stored[..n as usize]);
         }
-        // The same screen runs as the menu app and as the page next to the face; the loader
-        // tells the surfaces apart, the app does not have to.
-        list_main(api, m, stored, lv, batch)
+        let mode = if api.on_page() { Mode::Page } else { Mode::Menu };
+        list_main(api, m, stored, lv, batch, mode)
     }
 
-    /// The connection tail both loops share: phone messages into the model, the
-    /// pending/disconnect timeouts, the connection flag and the widget card. Returns true
-    /// when the caller's screen should redraw.
     struct Link {
         last_rx: u32,
         last_connection: bool,
@@ -107,7 +112,7 @@ mod device {
         }
     }
 
-    fn sync(api: &Api, m: &mut Model, stored: &mut [u8; 192], link: &mut Link) -> bool {
+    fn sync(api: &Api, m: &mut Model, stored: &mut [u8; 384], link: &mut Link) -> bool {
         let mut dirty = false;
         if m.connected != link.last_connection {
             link.last_connection = m.connected;
@@ -115,39 +120,43 @@ mod device {
             link.widget_dirty = true;
         }
         for i in 0..MAX_BUTTONS {
-            let state = (m.buttons[i].enabled as u8) << 1 | m.buttons[i].on as u8;
+            let b = match m.buttons.get(i) { Some(b) => b, None => continue };
+            let state = ((b.enabled as u8) << 2) | ((b.on as u8) << 1) | (b.value >= 100) as u8;
             if link.last_state[i] != state {
                 link.last_state[i] = state;
                 link.widget_dirty = true;
+                dirty = true;
             }
         }
         let mut rx = [0u8; MSG_MAX];
         while let Some(msg) = api.recv(&mut rx) {
             link.last_rx = api.now();
             match m.apply(msg) {
-                Effect::Ignored => {}
-                Effect::Configured => {
-                    let n = m.save(stored);
-                    if n > 0 {
-                        let _ = api.save(&stored[..n]);
-                    }
+                Effect::Ignored | Effect::Heartbeat | Effect::Ack(_) => {}
+                Effect::Linked => {
                     dirty = true;
                     link.widget_dirty = true;
                 }
-                Effect::Heartbeat => {}
+                Effect::Configured => {
+                    let n = m.save(stored);
+                    if n > 0 { let _ = api.save(&stored[..n]); }
+                    dirty = true;
+                    link.widget_dirty = true;
+                }
                 Effect::Changed => {
                     dirty = true;
                     link.widget_dirty = true;
                 }
-                Effect::Ack(_) | Effect::Error(_) => dirty = true,
+                Effect::Error(_) => dirty = true,
             }
         }
         let now = api.now();
         if m.pending.is_some() && now.wrapping_sub(link.last_rx) > 12_000 {
-            m.pending = None;
-            m.error = Some(2);
+            // The phone or Home Assistant never answered: show it, keep the app alive.
+            m.cancel_pending(2);
             link.last_rx = now;
             dirty = true;
+            link.widget_dirty = true;
         }
         if m.connected && now.wrapping_sub(link.last_rx) > 30_000 {
             m.mark_disconnected();
@@ -165,24 +174,29 @@ mod device {
         dirty
     }
 
-    /// The full control list, as the Apps-menu entry and as the page next to the face.
-    /// BUTTON exits from the menu; on the page the crown stays with the watch, so the app
-    /// keeps running behind the face until a swipe away pauses it.
+    /// Maps a negative `send` result to a diagnostic code shown on the phone row.
+    fn send_code(r: i32) -> u8 {
+        match r {
+            -11 => 11,
+            -107 => 107,
+            _ => 255,
+        }
+    }
+
     fn list_main(
         api: &'static Api,
         m: &mut Model,
-        stored: &mut [u8; 192],
+        stored: &mut [u8; 384],
         lv: Lv,
         mut batch: Batch,
+        mode: Mode,
     ) -> i32 {
         let mut flush = |b: &mut Batch| b.submit(&lv);
-        let mut screen = match Screen::build(&mut batch, m, &mut flush) {
+        let mut screen = match Screen::build(&mut batch, m, mode, &mut flush) {
             Ok(screen) => screen,
             Err(_) => return 2,
         };
-        if flush(&mut batch).is_err() {
-            return 3;
-        }
+        if flush(&mut batch).is_err() { return 3; }
         let mut seq = 0u8;
         let mut dirty = true;
         let mut redraw_retry = false;
@@ -192,37 +206,51 @@ mod device {
         let _ = api.send(&proto::HELLO);
         loop {
             let mut timeout = 250;
-            if m.pending.is_some() {
-                timeout = 20;
-            }
+            if m.pending.is_some() { timeout = 20; }
             match api.event(timeout) {
-                Some(e) if e.kind == BUTTON => return 0,
-                Some(e) if e.kind == LV && e.y == 7 => {
-                    let i = screen.rows.iter().position(|row| row.0 == e.x as u16);
-                    if let Some(i) = i {
-                        if let Some(frame) = m.toggle_frame(i, seq) {
+                Some(e) if e.kind == BUTTON && mode == Mode::Menu => return 0,
+                Some(e) if e.kind == LV && e.y == CLICKED => {
+                    let slot = screen.row_slot(e.x as u16);
+                    if let Some(slot) = slot {
+                        if let Some(frame) = m.toggle_frame(slot, seq) {
                             seq = seq.wrapping_add(1);
                             let sent = api.send(&frame);
-                            if sent < 0 {
-                                m.pending = None;
-                                m.pending_target = None;
-                                m.pending_seq = None;
-                                // Keep the transport failure distinguishable from the
-                                // companion's protocol error 1 (busy/invalid slot).
-                                m.error = Some(match sent {
-                                    -11 => 11,
-                                    -107 => 107,
-                                    _ => 255,
-                                });
-                            }
+                            if sent < 0 { m.cancel_pending(send_code(sent)); }
                             dirty = true;
+                        } else if !m.connected {
+                            // Tapped while the phone link is down: say so, keep running.
+                            m.cancel_pending(107);
+                            dirty = true;
+                        }
+                    }
+                }
+                Some(e) if e.kind == LV && e.y == VALUE_CHANGED => {
+                    if let Some(slot) = screen.slider_slot(e.x as u16) {
+                        let v = e.delta.clamp(0, 100) as u8;
+                        match m.brightness_frame(slot, v, seq) {
+                            Some(frame) => {
+                                seq = seq.wrapping_add(1);
+                                let sent = api.send(&frame);
+                                if sent < 0 { m.cancel_pending(send_code(sent)); }
+                                dirty = true;
+                            }
+                            None => {
+                                if !m.connected {
+                                    m.cancel_pending(107);
+                                    dirty = true;
+                                } else if m.later.is_some() {
+                                    // Queued behind the in-flight command; the model already
+                                    // shows the dragged value.
+                                    dirty = true;
+                                }
+                            }
                         }
                     }
                 }
                 Some(e) if e.kind == PAUSE => {
                     loop {
                         match api.event(u32::MAX).map(|e| e.kind) {
-                            Some(BUTTON) => return 0,
+                            Some(BUTTON) if mode == Mode::Menu => return 0,
                             Some(RESUME) => break,
                             _ => {}
                         }
@@ -232,22 +260,24 @@ mod device {
                 }
                 _ => {}
             }
+            // Flush a brightness the user dragged to while another command was in flight.
+            if let Some(frame) = m.take_later(seq) {
+                seq = seq.wrapping_add(1);
+                let sent = api.send(&frame);
+                if sent < 0 { m.cancel_pending(send_code(sent)); }
+                dirty = true;
+            }
             if redraw_retry && api.now().wrapping_sub(last_redraw_retry) >= 1000 {
                 dirty = true;
                 last_redraw_retry = api.now();
             }
-            if sync(api, m, stored, &mut link) {
-                dirty = true;
-            }
+            if sync(api, m, stored, &mut link) { dirty = true; }
             if dirty {
                 let redraw = screen
-                    .update(&mut batch, m)
-                    .and_then(|_| batch.submit(&lv));
+                    .update(&mut batch, m, &mut flush)
+                    .and_then(|_| flush(&mut batch));
                 if redraw.is_err() {
-                    // LVGL batches can fail transiently when the loader is changing
-                    // surfaces. Returning here closes the app and loses the live BLE
-                    // session, so leave it running and retry on the next event/update.
-                    m.error = Some(3);
+                    // Keep the live BLE session: retry instead of exiting the app.
                     redraw_retry = true;
                     last_redraw_retry = api.now();
                 } else {
@@ -257,5 +287,5 @@ mod device {
             }
         }
     }
-
 }
+

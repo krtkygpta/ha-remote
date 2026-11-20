@@ -1,8 +1,9 @@
 # Home Assistant remote for the CMF Watch Pro 2
 
-Control up to five Home Assistant lights or light groups from the watch. Each control's name, section and entity
-are set in the Android companion; the watch shows the names and sends toggle requests, and the phone runs the
-Home Assistant commands and confirms the resulting state back.
+Control up to ten Home Assistant entities from the watch: lights with brightness sliders, plus switches, fans and
+anything else that turns on and off. Names, sections, control kinds and up to five favorites are set in the Android
+companion; the watch sends toggle and brightness requests, and the phone runs the commands and confirms the real
+state back.
 
 - `apps/ha-remote/` — the watch app (the same files as the [`HA-remote` branch of krtkygpta/apps](https://github.com/krtkygpta/apps/tree/HA-remote),
   which is where it can be merged into the FMC store). `store.toml`/`store.md` are its store listing,
@@ -44,7 +45,8 @@ gradlew.bat assembleDebug      # needs JDK 17 and the Android SDK (platform 35)
 Install `android/app/build/outputs/apk/debug/app-debug.apk`. Pair the watch once in Nothing X; the companion
 connects to the already bonded watch without a second pairing, reads the channel key over the shell service, and
 keeps Nothing X connected. Then enter the Home Assistant URL and a long-lived access token, pick entities for up
-to five slots, and connect. A foreground service keeps both links alive while the screen is off.
+to configure up to ten controls and up to five favorites, and connect. A foreground service keeps both links alive
+while the screen is off.
 
 The app channel is encrypted but readable by anyone who can obtain the watch's pairing secret; keep control names
 generic and never send credentials through it.

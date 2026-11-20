@@ -1,14 +1,15 @@
 # Home Assistant (ha-remote)
 
-Five Home Assistant light or group toggles on the watch. Each control's name and section are set from the phone,
-and a tap on a row asks the phone to toggle the light; the phone confirms the resulting state back.
+Up to ten Home Assistant controls on the watch: toggle switches for on/off entities and brightness
+sliders for lights, with names and sections set from the phone. The Apps row lists every control;
+the page next to the face and the widget card show up to five favorites.
 
-The Android companion (setup UI, Home Assistant connection, the watch's BLE link, and the APK) lives in its own
-repository: <https://github.com/krtkygpta/ha-remote>. That repository also carries this watch app under the same
-`apps/ha-remote/` layout, plus PC install instructions.
+The Android companion (setup UI, entity picker, Home Assistant connection, the watch's BLE link,
+and the APK) lives in its own repository: <https://github.com/krtkygpta/ha-remote>. That repository
+also carries this watch app under the same `apps/ha-remote/` layout, plus PC install instructions.
 
-`store.toml` and `store.md` are the FMC store listing; `ANDROID_COMPANION.md` documents the watch-phone protocol
-contract.
+`store.toml` and `store.md` are the FMC store listing; `ANDROID_COMPANION.md` documents the
+watch-phone protocol contract.
 
 ## Build and install
 

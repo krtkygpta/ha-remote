@@ -43,14 +43,26 @@ class CompanionProtocolTest {
     }
 
     @Test fun watchAppFramesMatchTheRustProtocol() {
-        val config = WatchAppProtocol.config(listOf(WatchAppProtocol.Slot(true, "Desk"), WatchAppProtocol.Slot(false, "Control 2")))
-        assertArrayEquals(byteArrayOf('H'.code.toByte(), '1'.code.toByte(), 'C'.code.toByte(), 2,
-            1, 4, 'D'.code.toByte(), 'e'.code.toByte(), 's'.code.toByte(), 'k'.code.toByte(),
-            0, 9, 'C'.code.toByte(), 'o'.code.toByte(), 'n'.code.toByte(), 't'.code.toByte(), 'r'.code.toByte(), 'o'.code.toByte(), 'l'.code.toByte(), ' '.code.toByte(), '2'.code.toByte()), config)
+        val halfA = listOf(
+            WatchAppProtocol.Slot(true, "Lamp", "Room", WatchAppProtocol.DIMMER),
+            WatchAppProtocol.Slot(false, "Control 2")
+        )
+        val config = WatchAppProtocol.configA(halfA, listOf(0, -1, -1, -1, -1))
+        assertArrayEquals(
+            hex("48315502" + "0101044c616d70" + "000009436f6e74726f6c2032" + "00ffffffff"),
+            config
+        )
+        val configB = WatchAppProtocol.configB(listOf(WatchAppProtocol.Slot(true, "Strip", "", WatchAppProtocol.DIMMER)))
+        assertArrayEquals(hex("48315601" + "0101055374726970"), configB)
+        assertArrayEquals(hex("48314a0204526f6f6d00"), WatchAppProtocol.sectionsA(halfA))
         assertEquals(WatchAppProtocol.Toggle(7, 2, true), WatchAppProtocol.parseToggle(byteArrayOf('H'.code.toByte(), '1'.code.toByte(), 'T'.code.toByte(), 7, 2, 1)))
         assertNull(WatchAppProtocol.parseToggle(byteArrayOf('H'.code.toByte(), '1'.code.toByte(), 'T'.code.toByte(), 7, 2, 2)))
+        assertNotNull(WatchAppProtocol.parseToggle(byteArrayOf('H'.code.toByte(), '1'.code.toByte(), 'T'.code.toByte(), 7, 9, 1)))
+        assertNull(WatchAppProtocol.parseToggle(byteArrayOf('H'.code.toByte(), '1'.code.toByte(), 'T'.code.toByte(), 7, 10, 1)))
+        assertEquals(WatchAppProtocol.Brightness(5, 7, 80), WatchAppProtocol.parseBrightness(hex("483142050750")))
+        assertNull(WatchAppProtocol.parseBrightness(hex("483142050765")))
         assertArrayEquals(byteArrayOf('H'.code.toByte(), '1'.code.toByte(), 'E'.code.toByte(), 7, 1), WatchAppProtocol.error(7, 1))
-        assertArrayEquals(byteArrayOf('H'.code.toByte(), '1'.code.toByte(), 'S'.code.toByte(), 2, 1, 0), WatchAppProtocol.state(2, true, 0))
+        assertArrayEquals(byteArrayOf('H'.code.toByte(), '1'.code.toByte(), 'S'.code.toByte(), 2, 1, 65, 0), WatchAppProtocol.state(2, true, 65, 0))
         assertArrayEquals(byteArrayOf('H'.code.toByte(), '1'.code.toByte(), 'P'.code.toByte()), WatchAppProtocol.heartbeat())
         assertArrayEquals(byteArrayOf('H'.code.toByte(), '1'.code.toByte(), 'W'.code.toByte(), (-22).toByte()), WatchAppProtocol.widgetStatus(-22))
     }

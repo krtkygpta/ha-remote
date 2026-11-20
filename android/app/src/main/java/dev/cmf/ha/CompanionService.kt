@@ -32,7 +32,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 
 /**
- * Holds the watch link while the screen is off. Pushes the five controls and their states to
+ * Holds the watch link while the screen is off. Pushes the ten controls and their states to
  * the watch app, answers its toggle requests through Home Assistant, and reconnects with
  * bounded backoff after any loss. Home Assistant stays optional: the link keeps running and
  * the watch shows cached state until it recovers.
@@ -242,6 +242,7 @@ class CompanionService : Service() {
                     }
                 }
                 WatchAppProtocol.parseToggle(message) != null -> handleToggle(link, ha, WatchAppProtocol.parseToggle(message)!!)
+                WatchAppProtocol.parseBrightness(message) != null -> handleBrightness(link, ha, WatchAppProtocol.parseBrightness(message)!!)
                 else -> Unit
             }
         }
@@ -251,7 +252,7 @@ class CompanionService : Service() {
         val seq = toggle.sequence
         val slot = toggle.slot
         val prefs = getSharedPreferences("remote", MODE_PRIVATE)
-        if (slot !in 0..4 || !prefs.getBoolean("enabled" + slot, false)) {
+        if (slot !in 0 until WatchAppProtocol.SLOTS || !prefs.getBoolean("enabled" + slot, false)) {
             sendError(link, seq, 1)
             return
         }
@@ -267,8 +268,9 @@ class CompanionService : Service() {
             link.send(WatchAppProtocol.ack(seq))
             if (ha == null) {
                 val cached = prefs.getBoolean("state_" + slot, false)
-                runCatching { link.send(WatchAppProtocol.state(slot, toggle.on, 1)) }
-                prefs.edit().putBoolean("state_" + slot, toggle.on).apply()
+                val cachedValue = prefs.getInt("brightness_$slot", if (cached) 100 else 0)
+                runCatching { link.send(WatchAppProtocol.state(slot, cached, cachedValue, 1)) }
+                prefs.edit().putBoolean("state_" + slot, cached).apply()
                 return
             }
             val entity = prefs.getString("entity" + slot, "")!!.trim()
@@ -276,13 +278,67 @@ class CompanionService : Service() {
                 ha.set(entity, toggle.on)
                 ha.awaitState(entity, toggle.on)
             }
-            prefs.edit().putBoolean("state_" + slot, toggle.on).apply()
-            link.send(WatchAppProtocol.state(slot, toggle.on, if (confirmed) 0 else 2))
+            val st = runCatching { ha.state(entity) }
+                .getOrDefault(HaApi.EntityState(toggle.on, if (toggle.on) 100 else 0))
+            prefs.edit()
+                .putBoolean("state_$slot", st.on)
+                .putInt("brightness_$slot", st.value)
+                .apply()
+            link.send(WatchAppProtocol.state(slot, st.on, st.value, if (confirmed) 0 else 2))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             val cached = prefs.getBoolean("state_" + slot, false)
-            runCatching { link.send(WatchAppProtocol.state(slot, cached, 1)) }
+            val cachedValue = prefs.getInt("brightness_$slot", if (cached) 100 else 0)
+            runCatching { link.send(WatchAppProtocol.state(slot, cached, cachedValue, 1)) }
+        } finally {
+            busy.set(false)
+        }
+    }
+
+    /** A brightness drag from the watch: set it, confirm the reported value, publish state. */
+    private suspend fun handleBrightness(link: WatchLink, ha: HaApi?, request: WatchAppProtocol.Brightness) {
+        val seq = request.sequence
+        val slot = request.slot
+        val prefs = getSharedPreferences("remote", MODE_PRIVATE)
+        if (slot !in 0 until WatchAppProtocol.SLOTS || !prefs.getBoolean("enabled$slot", false)) {
+            sendError(link, seq, 1)
+            return
+        }
+        val now = android.os.SystemClock.elapsedRealtime()
+        synchronized(recentRequests) { recentRequests.entries.removeAll { now - it.value > 15_000 } }
+        if (synchronized(recentRequests) { recentRequests.containsKey(seq) }) return
+        if (!busy.compareAndSet(false, true)) {
+            sendError(link, seq, 1)
+            return
+        }
+        synchronized(recentRequests) { recentRequests[seq] = now }
+        try {
+            link.send(WatchAppProtocol.ack(seq))
+            if (ha == null) {
+                val cachedOn = prefs.getBoolean("state_$slot", false)
+                val cachedValue = prefs.getInt("brightness_$slot", if (cachedOn) 100 else 0)
+                runCatching { link.send(WatchAppProtocol.state(slot, cachedOn, cachedValue, 1)) }
+                return
+            }
+            val entity = prefs.getString("entity$slot", "")!!.trim()
+            val confirmed = withContext(Dispatchers.IO) {
+                ha.setBrightness(entity, request.value)
+                ha.awaitBrightness(entity, request.value)
+            }
+            val st = runCatching { ha.state(entity) }
+                .getOrDefault(HaApi.EntityState(request.value > 0, request.value))
+            prefs.edit()
+                .putBoolean("state_$slot", st.on)
+                .putInt("brightness_$slot", st.value)
+                .apply()
+            link.send(WatchAppProtocol.state(slot, st.on, st.value, if (confirmed) 0 else 2))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val cachedOn = prefs.getBoolean("state_$slot", false)
+            val cachedValue = prefs.getInt("brightness_$slot", if (cachedOn) 100 else 0)
+            runCatching { link.send(WatchAppProtocol.state(slot, cachedOn, cachedValue, 1)) }
         } finally {
             busy.set(false)
         }
@@ -290,17 +346,39 @@ class CompanionService : Service() {
 
     private suspend fun publishConfigAndStates(link: WatchLink, ha: HaApi?) {
         val prefs = getSharedPreferences("remote", MODE_PRIVATE)
-        val slots = (0..4).map { i ->
+        val slots = (0 until WatchAppProtocol.SLOTS).map { i ->
+            val entity = prefs.getString("entity$i", "")!!.trim()
+            val kind = if (prefs.contains("kind$i")) {
+                prefs.getInt("kind$i", WatchAppProtocol.TOGGLE)
+            } else if (entity.startsWith("light.")) WatchAppProtocol.DIMMER else WatchAppProtocol.TOGGLE
             WatchAppProtocol.Slot(
                 prefs.getBoolean("enabled$i", false),
                 prefs.getString("name$i", "")!!.trim().ifBlank { "Control " + (i + 1) },
-                prefs.getString("sec$i", "")!!.trim()
+                prefs.getString("sec$i", "")!!.trim(),
+                kind
             )
         }
-        if (link.send(WatchAppProtocol.config(slots)) != WatchLink.STATUS_OK) error("Could not send controls to watch")
-        val favorite = prefs.getInt("fav", -1)
-        if (link.send(WatchAppProtocol.groups(slots, favorite)) != WatchLink.STATUS_OK) error("Could not send sections to watch")
+        val halfA = slots.take(5)
+        val halfB = slots.drop(5)
+        // V, J, K configure; U is the commit frame the watch persists.
+        if (link.send(WatchAppProtocol.configB(halfB)) != WatchLink.STATUS_OK) error("Could not send controls to watch")
+        if (link.send(WatchAppProtocol.sectionsA(halfA)) != WatchLink.STATUS_OK) error("Could not send sections to watch")
+        if (link.send(WatchAppProtocol.sectionsB(halfB)) != WatchLink.STATUS_OK) error("Could not send sections to watch")
+        if (link.send(WatchAppProtocol.configA(halfA, favoriteSlots(prefs))) != WatchLink.STATUS_OK) error("Could not send controls to watch")
         if (ha != null) syncStates(link, ha, force = true)
+    }
+
+    private fun favoriteSlots(prefs: android.content.SharedPreferences): List<Int> {
+        val stored = prefs.getStringSet("favs", null)
+        if (stored != null) {
+            return stored.mapNotNull { it.toIntOrNull() }
+                .filter { it in 0 until WatchAppProtocol.SLOTS }
+                .distinct().sorted()
+                .take(WatchAppProtocol.FAVORITES)
+        }
+        // migration from releases with a single favorite
+        val legacy = prefs.getInt("fav", -1)
+        return if (legacy in 0 until WatchAppProtocol.SLOTS) listOf(legacy) else emptyList()
     }
 
     /** Pushes current Home Assistant states; returns how many entities were unreachable. */
@@ -308,7 +386,7 @@ class CompanionService : Service() {
         if (ha == null) return 0
         val prefs = getSharedPreferences("remote", MODE_PRIVATE)
         var unavailable = 0
-        for (i in 0..4) {
+        for (i in 0 until WatchAppProtocol.SLOTS) {
             if (!prefs.getBoolean("enabled$i", false)) continue
             val entity = prefs.getString("entity$i", "")!!.trim()
             val read = runCatching { withContext(Dispatchers.IO) { ha.state(entity) } }
@@ -316,16 +394,20 @@ class CompanionService : Service() {
             if (state == null) {
                 unavailable++
                 if (force) {
-                    val cached = prefs.getBoolean("state_$i", false)
-                    if (link.send(WatchAppProtocol.state(i, cached, 1)) != WatchLink.STATUS_OK) error("State update failed")
+                    val cachedOn = prefs.getBoolean("state_$i", false)
+                    val cachedValue = prefs.getInt("brightness_$i", if (cachedOn) 100 else 0)
+                    if (link.send(WatchAppProtocol.state(i, cachedOn, cachedValue, 1)) != WatchLink.STATUS_OK) error("State update failed")
                 }
                 continue
             }
-            val changed = prefs.getBoolean("state_$i", !state) != state
+            val changed = prefs.getBoolean("state_$i", !state.on) != state.on ||
+                prefs.getInt("brightness_$i", if (state.on) 100 else 0) != state.value
             if (force || changed) {
                 // A failed push is retried by the next sync; never let it escape and crash.
-                runCatching { link.send(WatchAppProtocol.state(i, state, if (read.isSuccess) 0 else 1)) }
-                if (read.isSuccess) prefs.edit().putBoolean("state_$i", state).apply()
+                runCatching { link.send(WatchAppProtocol.state(i, state.on, state.value, if (read.isSuccess) 0 else 1)) }
+                if (read.isSuccess) {
+                    prefs.edit().putBoolean("state_$i", state.on).putInt("brightness_$i", state.value).apply()
+                }
             }
         }
         return unavailable

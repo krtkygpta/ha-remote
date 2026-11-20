@@ -25,6 +25,7 @@ import android.widget.Spinner
 import android.widget.TextView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
+import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.textfield.TextInputEditText
@@ -43,7 +44,7 @@ import javax.crypto.spec.GCMParameterSpec
 
 /**
  * Material 3 setup screen, laid out as numbered steps: pick the watch, link Home Assistant,
- * name the five controls and choose a favorite. onCreate only builds views; every subsystem
+ * name up to ten controls and pick up to five favorites. onCreate only builds views; every subsystem
  * call is guarded, so the app always opens.
  */
 class MainActivity : Activity() {
@@ -56,11 +57,12 @@ class MainActivity : Activity() {
     private lateinit var watchSummary: TextView
     private lateinit var haUrl: TextInputEditText
     private lateinit var haToken: TextInputEditText
-    private val names by lazy { Array(5) { TextInputEditText(this) } }
-    private val entities by lazy { Array(5) { TextInputEditText(this) } }
-    private val sections by lazy { Array(5) { TextInputEditText(this) } }
-    private val switches by lazy { Array(5) { MaterialSwitch(this) } }
-    private lateinit var favoriteSpinner: Spinner
+    private val names by lazy { Array(10) { TextInputEditText(this) } }
+    private val entities by lazy { Array(10) { TextInputEditText(this) } }
+    private val sections by lazy { Array(10) { TextInputEditText(this) } }
+    private val switches by lazy { Array(10) { MaterialSwitch(this) } }
+    private val kinds = arrayOfNulls<Spinner>(10)
+    private val favoriteChecks = arrayOfNulls<MaterialCheckBox>(10)
     private var devices: List<BluetoothDevice> = emptyList()
     private var selectedAddress: String? = null
 
@@ -192,31 +194,49 @@ class MainActivity : Activity() {
         space(haBox, 8)
         val haButtons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         haButtons.addView(button("Test") { testHomeAssistant() }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        haButtons.addView(button("Load lights") { loadEntities() }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        haButtons.addView(button("Load entities") { loadEntities() }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         haBox.addView(haButtons)
         haBox.addView(label("Plain HTTP works on your home network; the token is then not encrypted.", 12f))
         root.addCard(haBox)
         space(root, 12)
 
-        val controlsBox = card("3 · Quick controls (up to five)")
+        val controlsBox = card("3 · Quick controls (up to ten)")
         controlsBox.addView(label("Names appear on the watch. Keep them short and non-sensitive.", 12f))
-        for (i in 0..4) {
+        for (i in 0..9) {
             space(controlsBox, 8)
             switches[i] = MaterialSwitch(this).apply { text = "Control " + (i + 1) }
             controlsBox.addView(switches[i])
             names[i] = fieldInto(controlsBox, "Watch label (max 15 bytes)")
-            entities[i] = fieldInto(controlsBox, "light.desk or group.downstairs")
+            entities[i] = fieldInto(controlsBox, "light.desk, switch.fan, …")
             sections[i] = fieldInto(controlsBox, "Section (optional, max 10 bytes)")
+            val kindRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            kindRow.addView(label("Control type", 14f))
+            val spinner = Spinner(this).apply {
+                adapter = ArrayAdapter(
+                    this@MainActivity,
+                    android.R.layout.simple_spinner_dropdown_item,
+                    arrayOf("Toggle switch", "Brightness slider")
+                )
+            }
+            kinds[i] = spinner
+            kindRow.addView(spinner)
+            controlsBox.addView(kindRow)
+            favoriteChecks[i] = MaterialCheckBox(this).apply {
+                text = "Favorite · page & widget"
+                setOnCheckedChangeListener { _, checked ->
+                    if (checked && favoriteChecks.count { it?.isChecked == true } > 5) {
+                        isChecked = false
+                        status.text = "Up to five favorites"
+                    }
+                }
+            }
+            controlsBox.addView(favoriteChecks[i])
         }
         space(controlsBox, 12)
-        controlsBox.addView(label("Favorite — shown on the watch's widget card", 14f, bold = true))
-        favoriteSpinner = Spinner(this)
-        favoriteSpinner.adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_dropdown_item,
-            arrayOf("None", "Control 1", "Control 2", "Control 3", "Control 4", "Control 5")
-        )
-        controlsBox.addView(favoriteSpinner)
+        controlsBox.addView(label("Favorites open on the watch page and widget (up to five)", 14f, bold = true))
         root.addCard(controlsBox)
         space(root, 16)
 
@@ -315,25 +335,39 @@ class MainActivity : Activity() {
     private fun loadSettings() {
         haUrl.setText(prefs.getString("url", "http://homeassistant.local:8123"))
         haToken.setText(runCatching { decryptToken() }.getOrDefault(""))
-        for (i in 0..4) {
+        for (i in 0..9) {
             switches[i].isChecked = prefs.getBoolean("enabled$i", false)
             names[i].setText(prefs.getString("name$i", ""))
             entities[i].setText(prefs.getString("entity$i", ""))
             sections[i].setText(prefs.getString("sec$i", ""))
+            val entity = prefs.getString("entity$i", "").orEmpty()
+            val defaultKind = if (entity.startsWith("light.")) WatchAppProtocol.DIMMER else WatchAppProtocol.TOGGLE
+            kinds[i]?.setSelection(prefs.getInt("kind$i", defaultKind).coerceIn(0, 1))
+            favoriteChecks[i]?.isChecked = false
         }
-        val fav = prefs.getInt("fav", -1)
-        favoriteSpinner.setSelection((fav + 1).coerceIn(0, 5))
+        val storedFavs = prefs.getStringSet("favs", null)
+        if (storedFavs != null) {
+            storedFavs.mapNotNull { it.toIntOrNull() }.forEach { slot ->
+                if (slot in 0..9) favoriteChecks[slot]?.isChecked = true
+            }
+        } else {
+            val legacy = prefs.getInt("fav", -1)
+            if (legacy in 0..9) favoriteChecks[legacy]?.isChecked = true
+        }
     }
 
     private fun saveSettings() {
         val editor = prefs.edit().putString("url", haUrl.text.toString().trim())
-        for (i in 0..4) {
+        for (i in 0..9) {
             editor.putBoolean("enabled$i", switches[i].isChecked)
                 .putString("name$i", names[i].text.toString().trim())
                 .putString("entity$i", entities[i].text.toString().trim())
                 .putString("sec$i", sections[i].text.toString().trim())
+                .putInt("kind$i", kinds[i]?.selectedItemPosition ?: 0)
         }
-        editor.putInt("fav", favoriteSpinner.selectedItemPosition - 1)
+        val favs = favoriteChecks.withIndex().filter { it.value?.isChecked == true }.map { it.index.toString() }.toSet()
+        editor.putStringSet("favs", favs)
+        editor.putInt("fav", favs.firstOrNull()?.toIntOrNull() ?: -1)
         editor.apply()
         runCatching { encryptToken(haToken.text.toString().trim()) }
     }
@@ -349,7 +383,7 @@ class MainActivity : Activity() {
             try {
                 status.text = "Testing Home Assistant connection…"
                 val count = withContext(Dispatchers.IO) { HaApi(url, token).also { it.validate() }.entities().size }
-                status.text = "Home Assistant connected · $count light entities and groups found"
+                status.text = "Home Assistant connected · $count entities found"
             } catch (e: Exception) {
                 status.text = "Home Assistant connection failed: " + (e.message ?: "check address and token")
             }
@@ -365,18 +399,18 @@ class MainActivity : Activity() {
         }
         scope.launch {
             try {
-                status.text = "Loading Home Assistant lights…"
+                status.text = "Loading Home Assistant entities…"
                 val list = withContext(Dispatchers.IO) { HaApi(url, token).entities() }
                 if (list.isEmpty()) {
-                    status.text = "No light entities or light groups found"
+                    status.text = "No entities found"
                     return@launch
                 }
                 val choices = list.map { (id, name) -> if (name.isBlank()) id else "$name · $id" }.toTypedArray()
                 MaterialAlertDialogBuilder(this@MainActivity)
                     .setTitle("Choose a control to configure")
-                    .setItems(Array(5) { "Control " + (it + 1) }) { _, slot ->
+                    .setItems(Array(10) { "Control " + (it + 1) }) { _, slot ->
                         MaterialAlertDialogBuilder(this@MainActivity)
-                            .setTitle("Select a light or light group")
+                            .setTitle("Select an entity")
                             .setItems(choices) { _, which ->
                                 entities[slot].setText(list[which].first)
                                 if (names[slot].text.isNullOrBlank()) names[slot].setText("Control " + (slot + 1))
@@ -386,7 +420,7 @@ class MainActivity : Activity() {
                     }
                     .setNegativeButton("Cancel", null)
                     .show()
-                status.text = "Found " + list.size + " light entities and groups"
+                status.text = "Found " + list.size + " entities"
             } catch (e: Exception) {
                 status.text = "Home Assistant error: " + (e.message ?: "request failed")
             }
@@ -419,14 +453,19 @@ class MainActivity : Activity() {
             status.text = "Enter a Home Assistant token"
             return
         }
-        for (i in 0..4) {
+        for (i in 0..9) {
             if (!switches[i].isChecked) continue
             if (names[i].text.toString().trim().toByteArray(StandardCharsets.UTF_8).size > 15) {
                 status.text = "Control " + (i + 1) + ": label must be 15 UTF-8 bytes or fewer"
                 return
             }
-            if (!entities[i].text.toString().trim().matches(Regex("(light|group)\\.[A-Za-z0-9_]+"))) {
-                status.text = "Control " + (i + 1) + ": choose a Home Assistant light or light group"
+            val entity = entities[i].text.toString().trim()
+            if (!entity.matches(Regex("[a-z_]+\\.[A-Za-z0-9_]+"))) {
+                status.text = "Control " + (i + 1) + ": enter a Home Assistant entity id (like light.desk)"
+                return
+            }
+            if (kinds[i]?.selectedItemPosition == WatchAppProtocol.DIMMER && !entity.startsWith("light.")) {
+                status.text = "Control " + (i + 1) + ": brightness sliders need a light.* entity"
                 return
             }
             if (sections[i].text.toString().trim().toByteArray(StandardCharsets.UTF_8).size > 10) {

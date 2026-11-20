@@ -1,8 +1,8 @@
 # Home Assistant Remote for CMF Watch Pro 2
 
-Android companion for the `apps/ha-remote` watch app. Configure up to five Home Assistant light entities or groups,
-including the short name shown on the watch. The phone calls Home Assistant; the watch sends toggle requests and
-shows confirmed state.
+Android companion for the `apps/ha-remote` watch app. Configure up to ten Home Assistant entities of any domain,
+each as a toggle or a brightness slider, with the short name, section and favorite shown on the watch. The phone
+calls Home Assistant; the watch sends toggle and brightness requests and shows confirmed state.
 
 ## Dual connection behavior
 
@@ -27,8 +27,8 @@ status reports whether the firmware stub advertises the level needed for app wid
 must also be a widget-capable release (2026-11-15 or newer); the OTA file's embedded widget entry alone cannot prove
 which firmware or loader is currently installed on the watch.
 
-The app currently takes an HTTP or HTTPS Home Assistant URL, a long-lived access token, and up to five `light.*` entity
-IDs or legacy `group.*` IDs containing lights. It uses Home Assistant's REST API.
+The app takes an HTTP or HTTPS Home Assistant URL, a long-lived access token, and up to ten entities of any domain
+(`light.*`, `switch.*`, `fan.*`, ...); brightness sliders require `light.*`. It uses Home Assistant's REST API.
 The token is encrypted with a key held in Android Keystore. It does not scan or bind; select a device already bonded
 in Nothing X. Never send Home Assistant credentials through the watch channel.
 
