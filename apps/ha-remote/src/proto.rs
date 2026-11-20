@@ -367,6 +367,8 @@ impl Model {
             return None;
         }
         let value = value.min(100);
+        // Show the dragged/pressed value immediately; the phone's state confirms it.
+        self.buttons[i].value = value;
         if self.pending.is_some() {
             self.later = Some((i as u8, value));
             return None;
@@ -375,7 +377,6 @@ impl Model {
         self.pending_value = Some(value);
         self.pending_target = None;
         self.pending_seq = Some(seq);
-        self.buttons[i].value = value;
         Some([b'H', b'1', BRIGHTNESS, seq, i as u8, value])
     }
 
@@ -673,7 +674,7 @@ mod tests {
         old[..2].copy_from_slice(b"D2");
         old[2] = HALF as u8;
         old[3] = 1;
-        let mut p = 4;
+        let p = 4;
         old[p] = 1; old[p + 1] = 4; old[p + 2] = 1;
         old[p + 3..p + 7].copy_from_slice(b"Desk");
         let mut mig = Model::new();

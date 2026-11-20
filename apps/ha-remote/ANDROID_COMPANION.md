@@ -53,6 +53,10 @@ Assistant, wait for the reported value to settle, then send `H1S`. The phone ser
 watch command at a time, duplicate sequences are idempotent, and a failed or timed-out Home Assistant call sends
 `H1S` with a nonzero result and the cached state so the watch never keeps an optimistic value.
 
+On the watch a dimmer row is a plain element: a short press sends `H1B` with 0 or 100 (on/off), and a long press
+opens the device's own slider page — drag it or turn the crown; both send normal `H1B` frames. No slider lives in
+the list rows.
+
 Watch config persistence uses a versioned `D3` blob: count, the five favorites, then ten fixed records of
 `enabled, kind, on, value, len, name[15], sec_len, section[10]`. The old `D2` five-slot blob is migrated on load
 (kind toggle, value mirrors on/off). Android remains authoritative and resends config and fresh states after every
