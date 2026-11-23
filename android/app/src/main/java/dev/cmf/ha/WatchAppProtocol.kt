@@ -6,8 +6,8 @@ import java.nio.charset.StandardCharsets
 /**
  * The ha-remote protocol v3 on top of the channel: ASCII "H1", a type byte, fixed fields.
  * Must match apps/ha-remote/src/proto.rs exactly: ten slots, a kind per slot (toggle or
- * dimmer) and five favorites. Configuration is split because ten 15-byte names do not fit
- * one 128-byte message; the phone sends V, J, K, U in that order and U is the commit.
+ * dimmer), five favorites and a separate ten-byte icon configuration. Configuration is split
+ * because ten 15-byte names do not fit one 128-byte message; the phone sends V, J, K, U, I.
  */
 internal object WatchAppProtocol {
 
@@ -16,8 +16,19 @@ internal object WatchAppProtocol {
     const val HALF = 5
     const val TOGGLE = 0
     const val DIMMER = 1
+    const val ICON_AUTO = 0
+    const val ICON_LIGHT_BULB = 1
+    const val ICON_CEILING_LIGHT = 2
+    const val ICON_FAN = 3
+    const val ICON_DEVICE = 4
 
-    data class Slot(val enabled: Boolean, val label: String, val section: String = "", val kind: Int = TOGGLE)
+    data class Slot(
+        val enabled: Boolean,
+        val label: String,
+        val section: String = "",
+        val kind: Int = TOGGLE,
+        val icon: Int = ICON_AUTO,
+    )
     data class Toggle(val sequence: Int, val slot: Int, val on: Boolean)
     data class Brightness(val sequence: Int, val slot: Int, val value: Int)
 
@@ -71,6 +82,13 @@ internal object WatchAppProtocol {
 
     /** Section titles for slots 5..10. */
     fun sectionsB(slots: List<Slot>): ByteArray = sectionsFrame('K', slots)
+
+    /** Explicit per-control Material icon ids, sent after the legacy-compatible config commit. */
+    fun icons(slots: List<Slot>): ByteArray {
+        require(slots.size == SLOTS && slots.all { it.icon in ICON_AUTO..ICON_DEVICE })
+        return byteArrayOf('H'.code.toByte(), '1'.code.toByte(), 'I'.code.toByte()) +
+            ByteArray(SLOTS) { slots[it].icon.toByte() }
+    }
 
     private fun sectionsFrame(type: Char, slots: List<Slot>): ByteArray {
         require(slots.size <= HALF)

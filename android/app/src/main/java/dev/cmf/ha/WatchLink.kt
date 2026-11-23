@@ -225,7 +225,7 @@ class WatchLink(context: Context, private val device: BluetoothDevice) {
     }
 
     /** One request/reply exchange; null on timeout. */
-    private suspend fun request(opcode: Int, plain: ByteArray): ByteArray? = requestLock.withLock {
+    suspend fun request(opcode: Int, plain: ByteArray): ByteArray? = requestLock.withLock {
         val k = key ?: return null
         write(CMD_W, CompanionProtocol.frame(opcode, plain, k))
         var result: ByteArray? = null

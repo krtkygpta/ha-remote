@@ -361,7 +361,8 @@ class CompanionService : Service() {
                 prefs.getBoolean("enabled$i", false),
                 prefs.getString("name$i", "")!!.trim().ifBlank { "Control " + (i + 1) },
                 prefs.getString("sec$i", "")!!.trim(),
-                kind
+                kind,
+                prefs.getInt("icon$i", WatchAppProtocol.ICON_AUTO).coerceIn(WatchAppProtocol.ICON_AUTO, WatchAppProtocol.ICON_DEVICE)
             )
         }
         val halfA = slots.take(5)
@@ -371,6 +372,7 @@ class CompanionService : Service() {
         if (link.send(WatchAppProtocol.sectionsA(halfA)) != WatchLink.STATUS_OK) error("Could not send sections to watch")
         if (link.send(WatchAppProtocol.sectionsB(halfB)) != WatchLink.STATUS_OK) error("Could not send sections to watch")
         if (link.send(WatchAppProtocol.configA(halfA, favoriteSlots(prefs))) != WatchLink.STATUS_OK) error("Could not send controls to watch")
+        if (link.send(WatchAppProtocol.icons(slots)) != WatchLink.STATUS_OK) error("Could not send control icons to watch")
         if (ha != null) syncStates(link, ha, force = true)
     }
 

@@ -21,8 +21,8 @@ android {
         applicationId = "dev.cmf.ha"
         minSdk = 26
         targetSdk = 35
-        versionCode = 14
-        versionName = "0.4.0"
+        versionCode = 18
+        versionName = "0.4.4"
     }
 
     compileOptions {
@@ -52,6 +52,19 @@ android {
         }
     }
 }
+
+// Refresh the bundled installer payload from the workspace's latest watch build when present.
+val syncBundledWatchApp = tasks.register("syncBundledWatchApp") {
+    doLast {
+        val packageFile = rootProject.file("../../../../../../target/ha-remote.wp2app")
+        if (packageFile.isFile) {
+            val assetsDir = layout.projectDirectory.dir("src/main/assets").asFile
+            assetsDir.mkdirs()
+            packageFile.copyTo(assetsDir.resolve("ha-remote.wp2app"), overwrite = true)
+        }
+    }
+}
+tasks.named("preBuild").configure { dependsOn(syncBundledWatchApp) }
 
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")

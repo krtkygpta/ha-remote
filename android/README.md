@@ -35,6 +35,14 @@ The app takes an HTTP or HTTPS Home Assistant URL, a long-lived access token, an
 The token is encrypted with a key held in Android Keystore. It does not scan or bind; select a device already bonded
 in Nothing X. Never send Home Assistant credentials through the watch channel.
 
+First launch includes a short setup guide. The Controls destination searches Home Assistant entities as you type in
+each entity field; focus a field to load suggestions, or load them from the Home Assistant setup card. Choose a
+Material bulb, ceiling light, fan or device icon for every control, or keep Auto to infer it from the label. Settings
+backup exports the URL, ten control definitions, icon choices and favorites as JSON. The Home Assistant token and watch address
+are excluded; enter the token again after restoring on another phone. The Installer includes a bundled
+`ha-remote.wp2app`; it can also install a selected package over the same bonded GATT channel. Building the watch app
+in the workspace refreshes the bundled package on the next Android build.
+
 ## Compatibility
 
 Use FMC patched firmware and App Loader with channel key K and the app message channel (2026-11-13 or newer), then
