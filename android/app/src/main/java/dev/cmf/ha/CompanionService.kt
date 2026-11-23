@@ -17,9 +17,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.nio.charset.StandardCharsets
 import java.util.LinkedHashMap
@@ -50,6 +52,7 @@ class CompanionService : Service() {
     private var restartJob: Job? = null
     private val recentRequests = LinkedHashMap<Int, Long>()
     private val busy = AtomicBoolean(false)
+    private val commandMutex = Mutex()
     private var widgetProbeResult: Int? = null
 
     @Volatile
@@ -241,8 +244,16 @@ class CompanionService : Service() {
                         }
                     }
                 }
-                WatchAppProtocol.parseToggle(message) != null -> handleToggle(link, ha, WatchAppProtocol.parseToggle(message)!!)
-                WatchAppProtocol.parseBrightness(message) != null -> handleBrightness(link, ha, WatchAppProtocol.parseBrightness(message)!!)
+                WatchAppProtocol.parseToggle(message)?.let { toggle ->
+                    busy.set(true)
+                    try { commandMutex.withLock { handleToggle(link, ha, toggle) } }
+                    finally { busy.set(false) }
+                }
+                WatchAppProtocol.parseBrightness(message)?.let { brightness ->
+                    busy.set(true)
+                    try { commandMutex.withLock { handleBrightness(link, ha, brightness) } }
+                    finally { busy.set(false) }
+                }
                 else -> Unit
             }
         }
@@ -259,10 +270,6 @@ class CompanionService : Service() {
         val now = android.os.SystemClock.elapsedRealtime()
         synchronized(recentRequests) { recentRequests.entries.removeAll { now - it.value > 15_000 } }
         if (synchronized(recentRequests) { recentRequests.containsKey(seq) }) return
-        if (!busy.compareAndSet(false, true)) {
-            sendError(link, seq, 1)
-            return
-        }
         synchronized(recentRequests) { recentRequests[seq] = now }
         try {
             link.send(WatchAppProtocol.ack(seq))
@@ -294,8 +301,6 @@ class CompanionService : Service() {
             val cachedValue = prefs.getInt("brightness_$slot", if (cached) 100 else 0)
             runCatching { link.send(WatchAppProtocol.state(slot, cached, cachedValue, 1, false)) }
             prefs.edit().putBoolean("avail_$slot", false).apply()
-        } finally {
-            busy.set(false)
         }
     }
 
@@ -311,10 +316,6 @@ class CompanionService : Service() {
         val now = android.os.SystemClock.elapsedRealtime()
         synchronized(recentRequests) { recentRequests.entries.removeAll { now - it.value > 15_000 } }
         if (synchronized(recentRequests) { recentRequests.containsKey(seq) }) return
-        if (!busy.compareAndSet(false, true)) {
-            sendError(link, seq, 1)
-            return
-        }
         synchronized(recentRequests) { recentRequests[seq] = now }
         try {
             link.send(WatchAppProtocol.ack(seq))
@@ -345,8 +346,6 @@ class CompanionService : Service() {
             val cachedValue = prefs.getInt("brightness_$slot", if (cachedOn) 100 else 0)
             runCatching { link.send(WatchAppProtocol.state(slot, cachedOn, cachedValue, 1, false)) }
             prefs.edit().putBoolean("avail_$slot", false).apply()
-        } finally {
-            busy.set(false)
         }
     }
 
